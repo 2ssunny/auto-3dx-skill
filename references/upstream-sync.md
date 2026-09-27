@@ -138,7 +138,7 @@ recorded commit is ever missing from the ancestry, compare trees with
 5. Add retired names to `RETIRED_NAMES` and new code-bearing reference files to
    `CODE_FILES` in `scripts/validate_skill.py`.
 6. Run the validator with the interpreter whose auto-3dx installation should be
-   checked: `python skills/global/auto-3dx/scripts/validate_skill.py`.
+   checked, from the repository root: `python scripts/validate_skill.py`.
 7. Search the skill for removed names, index or descriptor selection, outward-
    normal assumptions, provenance claims, stale recovery guidance, and
    machine-specific paths.

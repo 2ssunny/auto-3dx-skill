@@ -3,9 +3,10 @@
 Two checks run:
 
 1. Document contract (standard library only): the frontmatter holds only `name`
-   and `description`, the name matches the folder, every linked `references/`
-   file exists, SKILL.md stays short, and no machine-specific user path is
-   committed.
+   and `description`, the name is `auto-3dx`, every linked `references/` file
+   exists, every relative Markdown link in the repository resolves inside it,
+   SKILL.md stays short, no machine-specific user path is committed, and nothing
+   points at the skill's retired location inside the ai-agents repository.
 2. API check (needs `auto_3dx` importable): every ```python block in SKILL.md and
    references/examples.md is parsed, and each attribute or call on an object whose
    type can be inferred is checked against the installed package -- the member
@@ -17,7 +18,11 @@ Run it with the interpreter whose auto-3dx installation should be checked -- a v
 a Conda environment, or any other Python. It never looks for another interpreter,
 and it prints which interpreter and which `auto_3dx` it used:
 
-    python skills/global/auto-3dx/scripts/validate_skill.py
+    python scripts/validate_skill.py
+
+It finds the skill from its own location (the repository root is the parent of
+`scripts/`), so it runs from any working directory and does not depend on what
+the checkout folder is called.
 """
 
 import ast
@@ -43,6 +48,12 @@ CODE_FILES = (
     "references/geometry-query.md",
 )
 ALLOWED_FRONTMATTER_KEYS = {"name", "description"}
+#: Agents expose the skill under this name, whatever the checkout folder is called.
+SKILL_NAME = "auto-3dx"
+#: The skill's former home inside 2ssunny/ai-agents; this repository replaced it.
+RETIRED_LOCATION = "skills/global/auto-3dx"
+TEXT_SUFFIXES = {".md", ".yaml", ".py"}
+MARKDOWN_LINK = re.compile(r"\]\(([^)\s]+)\)")
 MAX_SKILL_LINES = 200
 USER_PATH_PATTERNS = (r"[A-Za-z]:\\Users\\", r"/home/[a-z]+/", r"/Users/[a-z]+/")
 
@@ -96,8 +107,8 @@ def check_document() -> list[str]:
     if extra:
         failures.append(f"Frontmatter has platform-specific keys: {sorted(extra)}.")
     name = re.search(r"^name:\s*(\S+)\s*$", match.group(1), re.MULTILINE)
-    if name is None or name.group(1) != SKILL_DIR.name:
-        failures.append(f"Frontmatter name must be {SKILL_DIR.name!r}.")
+    if name is None or name.group(1) != SKILL_NAME:
+        failures.append(f"Frontmatter name must be {SKILL_NAME!r}.")
     if not re.search(r"^description:\s*\S", match.group(1), re.MULTILINE):
         failures.append("Frontmatter description must not be empty.")
     lines = len(skill_text.splitlines())
@@ -106,15 +117,44 @@ def check_document() -> list[str]:
     for link in sorted(set(re.findall(r"\]\((references/[\w./-]+)\)", skill_text))):
         if not (SKILL_DIR / link).is_file():
             failures.append(f"SKILL.md links {link}, which does not exist.")
-    for path in sorted(SKILL_DIR.rglob("*")):
-        if not path.is_file() or path.suffix not in {".md", ".yaml", ".py"}:
-            continue
+    for path in skill_files():
+        relative = path.relative_to(SKILL_DIR).as_posix()
+        text = read_text(path)
+        if path.suffix == ".md":
+            failures.extend(check_links(path, relative, text))
         if path.resolve() == Path(__file__).resolve():
             continue
-        text = read_text(path)
         for pattern in USER_PATH_PATTERNS:
             if re.search(pattern, text):
-                failures.append(f"{path.relative_to(SKILL_DIR)} contains a user path.")
+                failures.append(f"{relative} contains a user path.")
+        if RETIRED_LOCATION in text:
+            failures.append(f"{relative} refers to the retired location {RETIRED_LOCATION}.")
+    return failures
+
+
+def skill_files() -> list[Path]:
+    """Lists the repository's text files, skipping hidden directories such as .git."""
+    files = []
+    for path in sorted(SKILL_DIR.rglob("*")):
+        if any(part.startswith(".") for part in path.relative_to(SKILL_DIR).parts):
+            continue
+        if path.is_file() and path.suffix in TEXT_SUFFIXES:
+            files.append(path)
+    return files
+
+
+def check_links(path: Path, relative: str, text: str) -> list[str]:
+    """Checks that each relative Markdown link resolves to a file inside the repository."""
+    failures = []
+    root = SKILL_DIR.resolve()
+    for target in sorted(set(MARKDOWN_LINK.findall(text))):
+        if re.match(r"[A-Za-z][\w+.-]*:", target) or target.startswith("#"):
+            continue  # URLs, mailto: and in-page anchors
+        resolved = (path.parent / target.split("#", 1)[0]).resolve()
+        if not resolved.is_relative_to(root):
+            failures.append(f"{relative} links {target}, which is outside the repository.")
+        elif not resolved.exists():
+            failures.append(f"{relative} links {target}, which does not exist.")
     return failures
 
 
