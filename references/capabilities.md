@@ -1,12 +1,16 @@
 # auto-3dx capability state
 
-What an agent may rely on today, through SDK Phase 4. Detailed signatures live
+What an agent may rely on today, through SDK Phase 5. Detailed signatures live
 in the installed package (`help(auto_3dx.geometry.part_design.PartDesign)` and
 similar), not here. When the installed package disagrees with this page, trust
 the package and report the drift.
 
 Upstream state reviewed: see `upstream-sync.md`. Live evidence comes from one
 installation (`B428_Cloud`); other 3DEXPERIENCE releases are unverified.
+
+The Phase 5 intent layer is described in [high-level-api.md](high-level-api.md).
+The table below also records the composable Level 2 fallback. Earlier Phase 4
+test counts in the environment table are historical evidence, not Phase 5 totals.
 
 ## How to read the labels
 
@@ -33,6 +37,9 @@ found at runtime. No Python distribution is privileged. Upstream evidence, all
 - The 6 skips need a Part prepared by hand; they are not failures.
 - Phase 1–4 acceptance scripts all pass using the public API only — no raw COM,
   no topology indices, no descriptor parsing.
+- Phase 5 SDK documentation reports 11/11 staged live tests and a full live
+  suite of 73 passed, 6 skipped on `B428_Cloud`; see the exact SDK commit in
+  `upstream-sync.md`.
 - Live runs use a disposable Part named by `AUTO3DX_LIVE_PART`.
 - Pending: live integration on Python 3.12 and 3.13 (unit only), the Phase 2–4
   work on Conda, 32-bit Python, Microsoft Store Python, and 3DEXPERIENCE
@@ -42,14 +49,15 @@ found at runtime. No Python distribution is privileged. Upstream evidence, all
 
 | Area | Status | Notes |
 |---|---|---|
+| Intent API | Verified | `body.features.*`, sketch helpers, `part.geometry.*`, `part.inspect.facts(...)`, writable properties; thin wrappers over public Level 2 |
 | Session / attach | Verified | `Catia.attach()`, `active_part()`, `editors()`, `parts()`, `part_named()`, `active_window_title`. Assembly context refused (`NoActivePartError`) |
 | Active-Part guard | Verified | Selection-based work (topology search, `remove_*`, visibility, constraint removal) refuses a non-active Part with `InactivePartError` |
 | Parameters | Verified | list/get/set/remove, typed `create_*`/`ensure_*`, unit catalogue. `EnumParam` **read** only — writing is not supported |
 | Parameter dependency safety | Partial | `dependents(name)` and the removal guard (`ParameterInUseError`) cover **formula** inputs. Rules, checks, laws, programs and design tables are not covered; `force=True` overrides |
 | Formula | Verified | create/ensure/get/list/remove, `relation_name()`, modify/rename/activate/deactivate, `reading(parameter)`, `Formula.inputs()`, `Formula.reads(parameter)` |
-| Sketch | Verified | create on origin planes or a user plane, ensure (origin strings only), get/list/names/remove/rename, `support()`, `set_center_line()` |
-| Sketch geometry | Partial | inside `edit()`: point, line, circle, arc, spline, rectangle, `set_construction`. **`rectangle()` draws four lines and creates no constraints** — editing one dimension can skew it into a parallelogram; constrain it yourself |
-| SketchElement rediscovery | Partial | `sketch.elements()`, `sketch.get_element(name)` (`SketchElementNotFoundError`), `name`, `kind`, and `radius` for circles. **Line coordinates are not exposed** |
+| Sketch | Verified | create on origin/user planes or a planar `Face`; `body.sketches` targets one body. Face sketches expose `frame()` and `created_on_face`; `support()` is `None` for a face sketch |
+| Sketch geometry | Partial | `sketch.rectangle/centered_rectangle/circle` use one edition. Rectangle constraints: none (0), orientation (4), dimensioned (6); none is fully constrained. Editor primitives remain available. Read `sketch.geometry()` only after edition closes |
+| SketchElement rediscovery | Partial | `elements()`, `get_element(name)`, `element.geometry()` after edition closes; verified line endpoints, circle/arc centre and radius, point coordinates. Unsupported kinds such as spline have no geometry read-back |
 | Constraints | Verified | 10 constraint kinds, inside `edit()` only; list/names/get, `broken_count`, dimensional read/write |
 | Constraint deletion | Verified | `sketch.constraints.remove(constraint_or_name)`, edit-state aware, verified after fresh-process rediscovery |
 | Planes | Verified | `create_offset`, `create_angle`, list/names/get. A new plane needs a rebuild before it can support a sketch (`SupportNotUpdatedError`) |
@@ -66,12 +74,12 @@ found at runtime. No Python distribution is privileged. Upstream evidence, all
 | Rib, Slot | Verified | Profile plus path sketches. No direction control |
 | Mirror | Verified | Origin plane |
 | Rectangular Pattern | Partial | `create_rectangular_pattern` and `remove_rectangular_pattern(pattern)`. **No dimensional editing** |
-| Circular Pattern | Partial | `create_circular_pattern(name, feature, angular_instances, angular_spacing_deg, axis="Z")`, list/get/remove, editable angular row. **Z axis only**; `radial_instances` read-only; no per-instance activation |
+| Circular Pattern | Partial | High-level `body.features.circular_pattern(...)` or Level 2 `create_circular_pattern(...)`; verified axes X/Y/Z, cylindrical Face, linear Edge and `reverse`; no complete-crown mode, per-instance activation, or radial control |
 | Fillet | Verified | `create_edge_fillet` on a body-scoped `Edge`; `radius` / `set_radius` / `radius_parameter()` |
 | Chamfer | Partial | `create_chamfer`; `length1` and `angle` with setters. **Length2 cannot be written** |
 | Shell | Verified | `create_shell` on a `Face`; `internal_thickness` and `external_thickness` with setters |
 | Thickness | Verified | `create_thickness` on a `Face`; `offset` / `set_offset` |
-| Hole | Partial | `create_hole` on a `Face`; `diameter` and `depth` with setters. No thread, countersink, counterbore or hole families |
+| Hole | Partial | Positioned `create_hole(origin=, diameter=, limit="blind"|"through_all", bottom="flat"|"v")` or `body.features.hole(support=, center=, diameter=, ...)`; limit is set explicitly against CATIA's carried defaults. No reversal, thread, counterbore or advanced families |
 | MultiSectionSolid | Partial | create/get/remove, **sections only**. No guides, closing points, coupling or dimensional editing |
 | Boolean Remove / Add / Intersect / Assemble | Verified | `create_boolean_*(name, tool_body)` with the work body as target. **The tool body is consumed permanently** |
 | Boolean removal | Verified, destructive | `remove_boolean(name, delete_consumed_body=True)` destroys the consumed body |
@@ -79,12 +87,14 @@ found at runtime. No Python distribution is privileged. Upstream evidence, all
 | Topology snapshots | Partial | Part-wide or `body=`-scoped, with the `CrossBodyReferenceError` guard. **No feature-level scoping**, no persistent identity, process-local registry |
 | Topology ownership | Partial | `current_owner_feature_name` (alias `owner_feature_name`) is the **current** BRep owner, not provenance. `owner_body_name` falls back to a unique name match and otherwise stays `None` — unknown, not "main body" |
 | Face measurement | Partial | `face.geometry`: `surface_type`, `area_mm2`, `center_mm`, `perimeter_mm`; planar `normal` and `plane_origin_mm`; cylindrical `radius_mm`. **Planar and cylindrical only**; others are `"unknown"` |
-| Plane normals | Partial | The supporting plane's orientation. **Not the outward solid normal** — top and bottom faces can report the same sign |
+| Plane normals | Partial | Measured topology normals describe the supporting plane, **not** the outward solid normal. A sketch newly created on a planar face has a separately verified outward frame normal on tested faces |
 | Edge measurement | Partial | `edge.geometry`: `curve_type`, `length_mm`, `start_mm`/`mid_mm`/`end_mm`; line `direction`; circle/arc `radius_mm`, `center_mm`, `angle_deg`. **Line, circle and arc only**; others are `"unknown"` |
 | Semantic geometry query | Verified | `snapshot.query()` with type, orientation, size, position and current-owner steps and explicit tolerances (`geometry-query.md`) |
+| Semantic finders | Verified | `part.geometry.top_face/bottom_face/find_planar_face/find_cylindrical_face/find_edge`; strict one-match result |
+| Plane coincidence | Partial | `EdgeQuery.on_plane_of(face)` checks coplanarity, **not adjacency** |
 | Query ambiguity handling | Verified | `one()` raises `TopologyQueryNoMatchError` / `TopologyQueryAmbiguousError`; rankings keep ties within tolerance |
 | Measurement | Verified | `measure(item)` → `volume_mm3`, `area_mm2`, `mass_kg`, `cog_mm`. Refuses a target that is not rebuilt (`TargetNotUpToDateError`) and never rebuilds |
-| Inspection | Verified | `part.inspect.summary()` including bodies, geometrical sets, topology counts and the In-Work Object; classifies circular patterns and the four boolean kinds |
+| Inspection | Verified | `part.inspect.facts(...)` for named, targeted facts without topology enumeration; `summary()` for comprehensive inspection including topology counts |
 | Update diagnostics | Partial | `part.inspect.update_issues()` and `PartUpdateError.issues` (`UpdateIssue`: `name`, `kind`, `body_name`, `up_to_date`, `active`). **Affected state only — not root-cause analysis** |
 | Deletion | Verified | Per-kind `remove_*`; cascades and guards in `safety.md` §4 |
 | Rebuild | Verified | `part.update()`, `part.update(target)`, `body.update()`, `part.is_up_to_date(target=None)`, `body.is_up_to_date` |
@@ -103,14 +113,14 @@ raw COM, a topology index or descriptor parsing.
 - A general dependency graph (Formula / Rule / Check / Law and beyond).
 - A fully constrained rectangle helper.
 - Direction control for Shaft, Groove and Rib.
-- Circular Pattern on the X or Y axis; per-instance activation; advanced radial
-  control.
+- Circular Pattern complete-crown mode, per-instance activation, and advanced
+  radial control.
 - Rectangular Pattern dimensional editing.
 - Restoring a consumed Boolean tool body; replacing a Boolean operand; body
   duplication or copy workflows.
-- Advanced Hole families; threads, countersinks, counterbores.
+- Hole reversal, threads, counterbores, and unverified advanced Hole families.
 - Loft guides, closing points and coupling; broad GSD surface geometry; Split.
-- Writing an `EnumParam`; line-coordinate reads on `Line2D`.
+- Writing an `EnumParam`; sketch read-back during an active edition.
 - Setting the In-Work Object outside `work_in` / `work_at`.
 - Renaming or reordering bodies; geometrical sets inside a body; axis systems.
 - Product / Assembly editing; PLM object creation.
@@ -134,8 +144,7 @@ raw COM, a topology index or descriptor parsing.
 | Selecting topology by `index` or by parsing `descriptor` | A semantic query with `one()` (`geometry-query.md`) |
 | `owner_feature_name` in new code | `current_owner_feature_name` (same value, honest name) |
 | `part.part_design.snapshot_edges()` / `snapshot_faces()` | `part.topology.edges()` / `faces()` |
-| `SolidMeasurement.editor_com_object` | `com_object` |
 | Passing raw 2D COM objects to constraints or `set_center_line` | The `SketchElement` the editor returned, or `sketch.get_element(name)` |
-| `catia.com_object.ActiveWindow.Caption` | `catia.active_window_title` |
+| Reading the active window through raw Automation | `catia.active_window_title` |
 | Deleting and recreating a feature to change a verified dimension | The feature's own setter (`editing.md`) |
 | An offset plane used only to flip a Pad or Pocket | `direction=` / `set_direction()` |

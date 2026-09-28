@@ -2,17 +2,12 @@
 
 Two checks run:
 
-1. Document contract (standard library only): the frontmatter holds only `name`
-   and `description`, the name is `auto-3dx`, every linked `references/` file
-   exists, every relative Markdown link in the repository resolves inside it,
-   SKILL.md stays short, no machine-specific user path is committed, and nothing
-   points at the skill's retired location inside the ai-agents repository.
-2. API check (needs `auto_3dx` importable): every ```python block in SKILL.md and
-   references/examples.md is parsed, and each attribute or call on an object whose
-   type can be inferred is checked against the installed package -- the member
-   exists, the arguments bind to its signature, package-root imports come from
-   `auto_3dx.__all__`, and no retired name is used. Without `auto_3dx` the check is
-   reported as SKIPPED, which is not a pass.
+1. Document contract (standard library only): frontmatter, short entrypoint,
+   links, compatibility metadata, core rules, paths, and retired-location checks.
+2. API check (needs `auto_3dx` importable): Phase 5 public symbols and every
+   ```python block in the code-bearing references. It checks syntax, inferred
+   members, call signatures, package-root exports, retired names, and raw COM
+   or private SDK names. Without `auto_3dx`, the API check is SKIPPED, not a pass.
 
 Run it with the interpreter whose auto-3dx installation should be checked -- a venv,
 a Conda environment, or any other Python. It never looks for another interpreter,
@@ -31,6 +26,7 @@ import dataclasses
 import importlib
 import importlib.util
 import inspect
+import json
 import re
 import sys
 import types
@@ -41,6 +37,7 @@ from typing import Any
 SKILL_DIR = Path(__file__).resolve().parent.parent
 CODE_FILES = (
     "SKILL.md",
+    "references/high-level-api.md",
     "references/examples.md",
     "references/topology.md",
     "references/editing.md",
@@ -53,6 +50,44 @@ SKILL_NAME = "auto-3dx"
 #: The skill's former home inside 2ssunny/ai-agents; this repository replaced it.
 RETIRED_LOCATION = "skills/global/auto-3dx"
 TEXT_SUFFIXES = {".md", ".yaml", ".py"}
+COMPATIBILITY_FILE = "compatibility.json"
+PHASE5_PUBLIC_SYMBOLS = (
+    "auto_3dx.highlevel.features.BodyFeatures.pad",
+    "auto_3dx.highlevel.features.BodyFeatures.pocket",
+    "auto_3dx.highlevel.features.BodyFeatures.hole",
+    "auto_3dx.highlevel.features.BodyFeatures.fillet",
+    "auto_3dx.highlevel.features.BodyFeatures.chamfer",
+    "auto_3dx.highlevel.features.BodyFeatures.circular_pattern",
+    "auto_3dx.geometry.sketch.Sketch.rectangle",
+    "auto_3dx.geometry.sketch.Sketch.centered_rectangle",
+    "auto_3dx.geometry.sketch.Sketch.circle",
+    "auto_3dx.geometry.sketch.Sketch.geometry",
+    "auto_3dx.geometry.sketch.Sketch.frame",
+    "auto_3dx.geometry.sketch.SketchElement.geometry",
+    "auto_3dx.highlevel.finders.PartGeometry.top_face",
+    "auto_3dx.highlevel.finders.PartGeometry.find_edge",
+    "auto_3dx.inspect.summary.Inspector.facts",
+    "auto_3dx.geometry.query.EdgeQuery.on_plane_of",
+    "auto_3dx.geometry.part_design.Pad.length",
+    "auto_3dx.geometry.part_design.Pocket.depth",
+    "auto_3dx.geometry.part_design.ConstRadEdgeFillet.radius",
+    "auto_3dx.geometry.part_design.Hole.diameter",
+    "auto_3dx.geometry.part_design.Hole.depth",
+    "auto_3dx.geometry.part_design.Hole.set_limit",
+    "auto_3dx.geometry.part_design.CircularPattern.instances",
+    "auto_3dx.geometry.part_design.CircularPattern.spacing_deg",
+    "auto_3dx.geometry.planes.OffsetPlane.offset",
+    "auto_3dx.geometry.part_design.PartDesign.create_circular_pattern",
+)
+SETTABLE_SYMBOLS = {
+    "Pad.length", "Pocket.depth", "ConstRadEdgeFillet.radius", "Hole.diameter",
+    "Hole.depth", "CircularPattern.instances", "CircularPattern.spacing_deg",
+    "OffsetPlane.offset",
+}
+FORBIDDEN_EXAMPLE_NAMES = {
+    "win32com", "com3dx", "com_object", "ShapeFactory", "HybridShapeFactory",
+    "Selection", "_com", "_generation",
+}
 MARKDOWN_LINK = re.compile(r"\]\(([^)\s]+)\)")
 MAX_SKILL_LINES = 200
 USER_PATH_PATTERNS = (r"[A-Za-z]:\\Users\\", r"/home/[a-z]+/", r"/Users/[a-z]+/")
@@ -61,8 +96,8 @@ USER_PATH_PATTERNS = (r"[A-Za-z]:\\Users\\", r"/home/[a-z]+/", r"/Users/[a-z]+/"
 RETIRED_NAMES = {
     "snapshot_edges": "use part.topology.edges()",
     "snapshot_faces": "use part.topology.faces()",
-    "editor_com_object": "use com_object",
-    "raw": "the only escape hatch is com_object",
+    "editor_com_object": "use public measurement and inspection APIs",
+    "raw": "use public SDK APIs",
 }
 
 CODE_BLOCK = re.compile(r"^```python\n(.*?)^```", re.DOTALL | re.MULTILINE)
@@ -114,6 +149,11 @@ def check_document() -> list[str]:
     lines = len(skill_text.splitlines())
     if lines > MAX_SKILL_LINES:
         failures.append(f"SKILL.md is {lines} lines; move detail into references/.")
+    if "Prefer the highest-level public auto-3dx API" not in skill_text:
+        failures.append("SKILL.md must state the high-level-first operating rule.")
+    if "part.update()" not in skill_text or "part.inspect.facts" not in skill_text:
+        failures.append("SKILL.md must explain explicit updates and targeted inspection.")
+    failures.extend(check_compatibility())
     for link in sorted(set(re.findall(r"\]\((references/[\w./-]+)\)", skill_text))):
         if not (SKILL_DIR / link).is_file():
             failures.append(f"SKILL.md links {link}, which does not exist.")
@@ -129,6 +169,26 @@ def check_document() -> list[str]:
                 failures.append(f"{relative} contains a user path.")
         if RETIRED_LOCATION in text:
             failures.append(f"{relative} refers to the retired location {RETIRED_LOCATION}.")
+    return failures
+
+
+def check_compatibility() -> list[str]:
+    """Checks the traceable Skill-to-SDK compatibility record."""
+    path = SKILL_DIR / COMPATIBILITY_FILE
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        return [f"{COMPATIBILITY_FILE} cannot be read: {error}"]
+    if not isinstance(record, dict):
+        return [f"{COMPATIBILITY_FILE} must contain a JSON object."]
+    required = {"skill_version", "sdk_commit", "sdk_package_version", "public_api_expectation"}
+    missing = required - record.keys()
+    failures = [f"{COMPATIBILITY_FILE} is missing {sorted(missing)}"] if missing else []
+    if not re.fullmatch(r"[0-9a-f]{40}", str(record.get("sdk_commit", ""))):
+        failures.append(f"{COMPATIBILITY_FILE} sdk_commit must be a full SHA-1 commit ID.")
+    for field in required - {"sdk_commit"}:
+        if not isinstance(record.get(field), str) or not record[field].strip():
+            failures.append(f"{COMPATIBILITY_FILE} {field} must be nonempty text.")
     return failures
 
 
@@ -172,13 +232,31 @@ def resolve_hint(hint: Any) -> Inferred:
     return None
 
 
-def return_type(function: Any) -> Inferred:
+def return_type(function: Any, owner: type | None = None) -> Inferred:
     """Reads a function's return annotation as an inferred type."""
     try:
         hints = typing.get_type_hints(inspect.unwrap(function))
-    except Exception:  # noqa: BLE001 -- unresolvable forward references are not errors
+    except NameError:
+        # Snapshot.query() imports its public query class inside the method, so the
+        # forward annotation is not in the module globals for get_type_hints().
+        annotation = getattr(function, "__annotations__", {}).get("return")
+        if annotation in {"EdgeQuery", "FaceQuery"}:
+            query_module = importlib.import_module("auto_3dx.geometry.query")
+            return ("inst", getattr(query_module, annotation))
         return None
-    return resolve_hint(hints.get("return"))
+    except Exception:  # noqa: BLE001 -- unresolvable annotations are not errors
+        return None
+    hint = hints.get("return")
+    resolved = resolve_hint(hint)
+    if resolved is not None:
+        return resolved
+    if (
+        owner is not None
+        and owner.__module__ == "auto_3dx.geometry.query"
+        and isinstance(hint, typing.TypeVar)
+    ):
+        return ("inst", owner)
+    return None
 
 
 def _auto_3dx_subclasses(cls: type) -> "list[type]":
@@ -283,7 +361,10 @@ class ApiChecker:
             return
         for alias in node.names:
             if module_name == "auto_3dx" and alias.name not in self.root_exports:
-                self.fail(node, f"{alias.name} is not a package-root export; import it from its own package")
+                self.fail(
+                    node,
+                    f"{alias.name} is not a package-root export; import it from its own package",
+                )
             value = getattr(module, alias.name, MISSING)
             if value is MISSING:
                 self.fail(node, f"{module_name} has no name {alias.name!r}")
@@ -339,12 +420,15 @@ class ApiChecker:
             self.expr(child)
         return None
 
-    def comprehension(self, node: ast.ListComp | ast.SetComp | ast.GeneratorExp | ast.DictComp) -> Inferred:
+    def comprehension(
+        self, node: ast.ListComp | ast.SetComp | ast.GeneratorExp | ast.DictComp
+    ) -> Inferred:
         """Checks a comprehension with its loop variables typed, without leaking them."""
         saved = dict(self.env)
         for generator in node.generators:
             iterable = self.expr(generator.iter)
-            self.bind_target(generator.target, iterable[1] if iterable and iterable[0] == "seq" else None)
+            item = iterable[1] if iterable and iterable[0] == "seq" else None
+            self.bind_target(generator.target, item)
             for condition in generator.ifs:
                 self.expr(condition)
         if isinstance(node, ast.DictComp):
@@ -411,7 +495,7 @@ class ApiChecker:
         _, cls, name, static, owner_kind = target
         function = static.__func__ if isinstance(static, (classmethod, staticmethod)) else static
         self.bind_arguments(node, cls, name, static, function, owner_kind)
-        return return_type(function)
+        return return_type(function, cls)
 
     def bind_arguments(
         self, node: ast.Call, cls: type, name: str, static: Any, function: Any, owner_kind: str
@@ -449,21 +533,63 @@ def check_code(source: str, label: str, root_exports: set[str]) -> tuple[list[st
         try:
             tree = ast.parse(match.group(1))
         except SyntaxError as error:
-            checker.errors.append(f"{label}:{first_line + (error.lineno or 0)}: syntax error: {error.msg}")
+            checker.errors.append(
+                f"{label}:{first_line + (error.lineno or 0)}: syntax error: {error.msg}"
+            )
             continue
         ast.increment_lineno(tree, first_line)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                module_names = (
+                    [alias.name for alias in node.names]
+                    if isinstance(node, ast.Import) else [node.module or ""]
+                )
+                for module_name in module_names:
+                    if module_name.startswith(
+                        ("win32com", "com3dx", "auto_3dx._", "auto_3dx.transport")
+                    ):
+                        checker.fail(node, f"raw COM or private SDK import {module_name!r}")
+            if isinstance(node, ast.Name) and node.id in FORBIDDEN_EXAMPLE_NAMES:
+                checker.fail(node, f"raw COM or private SDK name {node.id!r} in an example")
+            if isinstance(node, ast.Attribute) and node.attr in FORBIDDEN_EXAMPLE_NAMES:
+                checker.fail(node, f"raw COM or private SDK member {node.attr!r} in an example")
+            if isinstance(node, ast.Attribute) and node.attr.startswith("_"):
+                checker.fail(node, f"private member {node.attr!r} in an example")
         checker.block(tree.body)
     return checker.errors, checker.checked
 
 
-def check_api() -> tuple[str, list[str], int]:
+def check_phase5_symbols() -> tuple[list[str], int]:
+    """Checks the documented Phase 5 public entry points exist in this SDK."""
+    failures: list[str] = []
+    checked = 0
+    for symbol in PHASE5_PUBLIC_SYMBOLS:
+        module_name, class_name, member_name = symbol.rsplit(".", 2)
+        try:
+            module = importlib.import_module(module_name)
+            cls = getattr(module, class_name)
+            member = inspect.getattr_static(cls, member_name)
+        except (ImportError, AttributeError) as error:
+            failures.append(f"Phase 5 public symbol {symbol} is unavailable: {error}")
+            continue
+        if f"{class_name}.{member_name}" in SETTABLE_SYMBOLS:
+            if not isinstance(member, property) or member.fset is None:
+                failures.append(f"Phase 5 public symbol {symbol} is not writable.")
+        checked += 1
+    return failures, checked
+
+
+def check_api() -> tuple[str, list[str], int, int]:
     """Runs the API check, or reports it as skipped when auto_3dx is unavailable."""
     try:
         auto_3dx = importlib.import_module("auto_3dx")
     except ImportError:
-        return "SKIPPED", ["auto_3dx is not importable in this environment."], 0
+        return "SKIPPED", ["auto_3dx is not importable in this environment."], 0, 0
     failures: list[str] = []
     checked = 0
+    symbol_failures, symbol_count = check_phase5_symbols()
+    failures.extend(symbol_failures)
+    checked += symbol_count
     for relative in CODE_FILES:
         errors, count = check_code(read_text(SKILL_DIR / relative), relative, set(auto_3dx.__all__))
         failures.extend(errors)
@@ -471,7 +597,7 @@ def check_api() -> tuple[str, list[str], int]:
     if checked == 0:
         failures.append("No auto_3dx names were checked; the examples could not be analysed.")
     status = "FAIL" if failures else "PASS"
-    return status, failures, checked
+    return status, failures, checked, symbol_count
 
 
 def main() -> int:
@@ -485,8 +611,12 @@ def main() -> int:
     for failure in document_failures:
         print(f"  - {failure}")
 
-    status, api_messages, checked = check_api()
-    detail = f" ({checked} names checked)" if status != "SKIPPED" else ""
+    status, api_messages, checked, symbol_count = check_api()
+    detail = (
+        f" ({checked} names checked: {symbol_count} explicit symbols, "
+        f"{checked - symbol_count} example references)"
+        if status != "SKIPPED" else ""
+    )
     print(f"api check: {status}{detail}")
     for message in api_messages:
         print(f"  - {message}")

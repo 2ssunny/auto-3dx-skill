@@ -1,295 +1,286 @@
-# auto-3dx usage patterns
+# Engineering workflows with the public Phase 5 API
 
-A few high-value patterns against the current public API. Every `python` block
-here is checked against the installed package by `scripts/validate_skill.py`.
-Names such as `AGENT_PAD` are placeholders; pick names that do not collide with
-the user's model.
+These are independent patterns for an already open Part. Replace `MY_PART` and
+feature names with the user's actual target and noncolliding names. Each edit
+remains unsaved. The high-level call shapes follow the SDK's
+`examples/intent_api.py`; the fallback follows its public query implementation.
+Use a fresh topology result after a geometry-changing update.
 
-Topology is always selected by **geometric intent** with `one()` — never by
-index, never by parsing descriptors.
+## Simple block
 
-## 1. Attach, confirm the document, inspect
+```python
+from auto_3dx import Catia
+
+part = Catia.attach().part_named("MY_PART")
+body = part.bodies.main
+before = part.inspect.facts("up_to_date", "feature_count")
+sketch = part.sketches.create("BLOCK_PROFILE", support="XY")
+sketch.centered_rectangle(width=50.0, height=30.0, constraints="dimensioned")
+profile = sketch.geometry()  # the helper closed its edit session
+base = body.features.pad("BLOCK", profile=sketch, length=20.0, direction="+Z")
+part.update()
+after = part.inspect.facts("volume", "up_to_date")
+print(before["up_to_date"], len(profile.lines), after["volume"])
+```
+
+`dimensioned` adds horizontal/vertical and length constraints, but the rectangle
+is not fully constrained: it has no corner coincidence constraints.
+
+## Secondary sketch on the top face and Pocket
+
+```python
+from auto_3dx import Catia
+
+part = Catia.attach().part_named("MY_PART")
+body = part.bodies.main
+top = part.geometry.top_face()
+cut = part.sketches.create("TOP_CUT_PROFILE", support=top)
+local_corner = cut.frame().to_local((10.0, 5.0, top.geometry.center_mm[2]))
+cut.rectangle(width=8.0, height=6.0, origin=local_corner)
+cut.geometry()  # read back only after the helper's edition closed
+before = part.inspect.facts("volume")
+body.features.pocket("TOP_CUT", profile=cut, depth=3.0, direction="into_material")
+part.update()
+after = part.inspect.facts("volume", "up_to_date")
+print(before["volume"] - after["volume"], after["up_to_date"])
+```
+
+The example assumes a horizontal top face and a local profile point that lies
+inside it. Check those geometric assumptions for the actual Part.
+
+## Positioned through Hole and a circular pattern
+
+```python
+from auto_3dx import Catia
+
+part = Catia.attach().part_named("MY_PART")
+body = part.bodies.main
+top = part.geometry.top_face()
+hole = body.features.hole(
+    "BOLT_HOLE", support=top, center=(15.0, 0.0), diameter=4.0,
+    limit="through_all", bottom="flat",
+)
+body.features.circular_pattern(
+    "BOLT_CIRCLE", feature=hole, instances=6, total_angle_deg=360.0, axis="Z",
+)
+part.update()
+print(part.inspect.facts("volume", "up_to_date")["up_to_date"])
+```
+
+For a blind Hole use `depth=...` with `limit="blind"`. `center` may also be a
+global `(x, y, z)` point on the face. A two-value centre is supported for a
+face normal parallel to a world axis. Rebuild before finding fresh topology.
+
+## Semantic Fillet or Chamfer
+
+```python
+from auto_3dx import Catia
+
+part = Catia.attach().part_named("MY_PART")
+body = part.bodies.main
+edge = part.geometry.find_edge(kind="line", parallel="Z", nearest=(25.0, 15.0, 10.0))
+fillet = body.features.fillet("ROUND_CORNER", edges=[edge], radius=2.0)
+part.update()
+print(fillet.radius, part.inspect.facts("up_to_date")["up_to_date"])
+```
+
+For a bevel, use `body.features.chamfer("BEVEL", edge=edge, length=1.5)`
+instead. The finder requires exactly one match; refine intent if it is
+ambiguous. A fillet call supports one edge.
+
+## Property and parameter revision
+
+```python
+from auto_3dx import Catia
+
+part = Catia.attach().part_named("MY_PART")
+pad = part.part_design.get_pad("BLOCK")
+old_length = pad.length
+pad.length = 24.0
+part.parameters.set("WIDTH", 55.0, unit="mm")
+part.update()
+print(old_length, pad.length, part.inspect.facts("volume")["volume"])
+```
+
+Read the previous valid values before a risky revision so a failed update can
+be repaired by restoring them and rebuilding. Assignments and `set()` do not
+rebuild. The named parameter must already exist in the target Part.
+
+## Low-level query fallback
+
+Use a composed query when the intent is more specific than a semantic finder.
+This is still public API. The query uses a single body-scoped snapshot and
+requires one match.
+
+```python
+from auto_3dx import Catia
+
+part = Catia.attach().part_named("MY_PART")
+body = part.bodies.main
+snapshot = part.topology.faces(body=body)
+top = snapshot.query().planar().normal_parallel((0, 0, 1)).extreme((0, 0, 1)).one()
+print(top.geometry.area_mm2)
+```
+
+For a circular rim with radius 4 mm in that plane, continue with an **edge**
+snapshot:
+
+```python
+edges = part.topology.edges(body=body)
+rim = edges.query().circular().on_plane_of(top).radius_near(4.0).nearest(
+    (15.0, 0.0, top.geometry.center_mm[2])
+).one()
+print(rim.geometry.length_mm)
+```
+
+`on_plane_of(top)` asserts plane coincidence only, not adjacency. After any
+geometry-changing edit, take a new snapshot before selecting again.
+
+## Advanced Level 2 workflows
+
+These public API examples preserve coverage for operations whose engineering
+intent needs more context than a Level 3 helper. Use them only for the relevant
+task, and select names and geometry from the actual Part.
+
+### Detailed diagnosis and model-backed parameters
 
 ```python
 from auto_3dx import Catia
 
 catia = Catia.attach()
-print(catia.active_window_title)        # confirm the right document, no raw COM
-
-part = catia.part_named("MY_PART")      # catia.active_part() when only one is open
-summary = part.inspect.summary()
-print(summary.render())
-
-for body in summary.bodies:
-    print(body.name, body.is_main, len(body.features), len(body.sketches))
-in_work = summary.in_work_object
-if in_work is not None and not in_work.is_main_body:
-    print(f"In-Work Object is {in_work.name} ({in_work.kind})")
-```
-
-## 2. Parameters, and removing one a formula depends on
-
-```python
-from auto_3dx import Catia
-
-part = Catia.attach().active_part()
-parameters = part.parameters
-
-print(parameters.user_names())
-width = parameters.get("WIDTH")
+print(catia.active_window_title)
+part = catia.part_named("MY_PART")
+summary = part.inspect.summary()  # full inspection for diagnosis, not a routine poll
+print(summary.render(), summary.in_work_object)
+print(part.parameters.user_names(), part.formulas.names())
+width = part.parameters.get("WIDTH")
 print(width.short_name, width.kind, width.value, width.unit)
-
-parameters.set("WIDTH", 80.0, unit="mm")     # a value write: no rebuild
-part.update()
-
-print(parameters.dependents("WIDTH"))        # formulas that read it, from the model
-part.formulas.remove("WIDTH_DRIVER")         # remove the dependent formula first
-parameters.remove("WIDTH")
+print(part.parameters.dependents("WIDTH"))
 ```
 
-## 3. A new feature: guarded update, then measure
+Check formula dependents before changing or removing a parameter. Removal of a
+pre-existing object requires the user's specific intent.
 
-```python
-from auto_3dx import Catia, PartUpdateError
-
-part = Catia.attach().active_part()
-design = part.part_design
-before = part.measurement.measure()
-
-sketch = part.sketches.create("AGENT_PAD_PROFILE", support="XY")
-with sketch.edit() as editor:
-    editor.rectangle(60.0, 40.0)        # four lines, no constraints added
-
-pad = design.create_pad("AGENT_PAD", sketch, 12.0, unit="mm")
-try:
-    part.update()
-except PartUpdateError:
-    # This pad never built and there is nothing to roll back: removal is the repair.
-    design.remove_pad("AGENT_PAD")      # also removes AGENT_PAD_PROFILE
-    part.update()
-    raise
-
-after = part.measurement.measure()
-print(pad.height, after.volume_mm3 - before.volume_mm3)
-```
-
-## 4. Update failure: read the issues, roll back the edit
-
-```python
-from auto_3dx import Catia, PartUpdateError
-
-part = Catia.attach().active_part()
-boss = part.part_design.get_pad("BOSS")
-previous = boss.height                  # the last known valid value
-
-boss.set_height(1.0, unit="mm")
-try:
-    part.update()
-except PartUpdateError as error:
-    # Symptoms, not the cause: downstream features may be listed, not BOSS.
-    for issue in error.issues:
-        print(issue.name, issue.kind, issue.body_name, issue.up_to_date, issue.active)
-    boss.set_height(previous, unit="mm")    # roll back the most recent edit
-    part.update()                           # CATIA heals; nothing was deleted
-    print(part.is_up_to_date())
-    raise
-```
-
-## 5. The top face, by position — not by normal sign
-
-```python
-from auto_3dx import Catia, PartUpdateError
-
-part = Catia.attach().active_part()
-faces = part.topology.faces(body="PartBody")
-
-# Planar, normal along Z (either sign), then the highest along +Z.
-top = faces.query().planar().normal_parallel((0, 0, 1)).extreme((0, 0, 1)).one()
-print(top.geometry.area_mm2, top.geometry.center_mm)
-
-part.part_design.create_shell("AGENT_SHELL", top, internal_thickness=2.0,
-                              external_thickness=0.0)
-try:
-    part.update()
-except PartUpdateError:
-    part.part_design.remove_shell("AGENT_SHELL")
-    part.update()
-    raise
-```
-
-## 6. A fillet target found by geometry
-
-```python
-from auto_3dx import Catia
-from auto_3dx.errors import TopologyQueryAmbiguousError
-
-part = Catia.attach().active_part()
-body = part.bodies.get("AGENT_TOOL")
-edges = part.topology.edges(body=body)
-
-# A circular edge of radius ~6 mm whose centre is nearest the expected point.
-rim = edges.query().circular().radius_near(6.0, 0.01).nearest((30.0, 0.0, 25.0)).one()
-
-# A vertical straight edge near a known corner.
-try:
-    corner = edges.query().lines().parallel((0, 0, 1)).nearest((40.0, 25.0, 5.0)).one()
-except TopologyQueryAmbiguousError:
-    raise                               # the intent is underspecified: add a criterion
-
-with part.work_in(body):
-    part.part_design.create_edge_fillet("AGENT_RIM_FILLET", rim, radius=1.0)
-body.update()
-# The model changed: take a new snapshot and re-run the query before reusing it.
-```
-
-## 7. A pocket with explicit direction, verified by volume
+### Low-level Pocket with measured effect
 
 ```python
 from auto_3dx import Catia
 from auto_3dx.geometry.part_design import DIRECTION_ALONG_SKETCH_NORMAL
 
-part = Catia.attach().active_part()
+part = Catia.attach().part_named("MY_PART")
+body = part.bodies.main
 before = part.measurement.measure().volume_mm3
-
-sketch = part.sketches.create("AGENT_HOLE_PROFILE", support="XY")
+sketch = part.sketches.create("CUT_PROFILE", support="XY")
 with sketch.edit() as editor:
     editor.circle(0.0, 0.0, 4.0)
-pocket = part.part_design.create_pocket("AGENT_HOLE", sketch, 10.0,
-                                        direction=DIRECTION_ALONG_SKETCH_NORMAL)
+with part.work_in(body):
+    pocket = part.part_design.create_pocket(
+        "LOW_LEVEL_CUT", sketch, 10.0, direction=DIRECTION_ALONG_SKETCH_NORMAL
+    )
 part.update()
-
 removed = before - part.measurement.measure().volume_mm3
-if removed <= 0.0:
-    # Rebuilt fine, cut nothing: the direction was wrong for this sketch.
-    pocket.reverse_direction()
-    part.update()
-    removed = before - part.measurement.measure().volume_mm3
 print(pocket.direction, removed)
 ```
 
-## 8. Edit a reference plane, then delete it safely
+This direction suits a solid above XY. Verify that `removed` is positive for
+the actual model; successful update alone is insufficient.
 
-```python
-from auto_3dx import Catia
-from auto_3dx.errors import ReferenceInUseError
-
-part = Catia.attach().active_part()
-plane = part.planes.get("BOSS_PLANE")   # an offset plane; angle planes use set_angle
-previous = plane.offset
-plane.set_offset(8.0)                   # no rebuild here
-part.update()                           # the sketch and boss on it regenerate
-faces = part.topology.faces(body="PartBody")    # everything moved: fresh snapshot
-
-print(part.planes.dependents(plane))    # sketches still built on the plane
-try:
-    part.planes.remove(plane)
-except ReferenceInUseError:
-    part.part_design.remove_pad("BOSS")  # removes the boss and its sketch
-    part.update()
-    part.planes.remove(plane)            # now nothing depends on it
-print(previous)
-```
-
-## 9. Edit a model this process did not build
-
-```python
-from auto_3dx import Catia
-
-part = Catia.attach().active_part()
-
-sketch = part.sketches.get("PROFILE")            # rediscover by name
-print(sketch.element_names())
-circle = sketch.get_element("Circle.1")          # SketchElementNotFoundError if gone
-print(circle.kind, circle.radius)
-
-fillet = part.part_design.get_edge_fillet("F1")
-fillet.set_radius(8.0)                           # edit, never delete-and-recreate
-hole = part.part_design.get_hole("H1")
-hole.set_diameter(6.0)
-part.update()                                    # one rebuild for the batch
-```
-
-## 10. Insert a feature at a chosen point in history
-
-```python
-from auto_3dx import Catia
-
-part = Catia.attach().active_part()
-base = part.part_design.get_pad("BASE")
-sketch = part.sketches.get("RIB_PROFILE")
-
-with part.work_at(base):                 # the new pad lands right after BASE
-    part.part_design.create_pad("RIB", sketch, 6.0)
-part.update()
-```
-
-## 11. Model in another body, rebuild it, measure it
-
-```python
-from auto_3dx import Catia
-
-part = Catia.attach().active_part()
-
-body = part.bodies.create("AGENT_TOOL")
-with part.work_in(body):
-    sketch = part.sketches.create("AGENT_TOOL_PROFILE", support="XY")
-    with sketch.edit() as editor:
-        editor.rectangle(40.0, 30.0)
-    part.part_design.create_pad("AGENT_TOOL_PAD", sketch, 20.0, unit="mm")
-
-body.update()                            # leaving the block rebuilds nothing
-print(part.measurement.measure(body).volume_mm3)
-```
-
-## 12. A bolt circle, instead of duplicating holes by hand
-
-```python
-from auto_3dx import Catia
-
-part = Catia.attach().active_part()
-
-seed = part.part_design.get_pocket("BOLT_HOLE")
-pattern = part.part_design.create_circular_pattern("BOLT_CIRCLE", seed, 6, 60.0)
-part.update()                            # axis="Z" is the only verified axis
-
-pattern.set_angular_instances(8)         # setters do not rebuild
-part.update()
-print(pattern.angular_instances, pattern.angular_spacing_deg)
-```
-
-## 13. A boolean, whose tool body is consumed for good
-
-```python
-from auto_3dx import Catia
-
-part = Catia.attach().active_part()
-housing = part.bodies.get("AGENT_HOUSING")
-core = part.bodies.get("AGENT_TOOL")
-
-with part.work_in(housing):              # the work body is the target
-    cut = part.part_design.create_boolean_remove("CUT_CORE", core)
-part.update()
-
-# AGENT_TOOL is consumed: gone from part.bodies, and it does not come back.
-print(cut.operation, cut.tool_body_name, part.bodies.names())
-```
-
-## 14. Suppress a feature instead of deleting it
+### Roll back a failed dimension edit
 
 ```python
 from auto_3dx import Catia, PartUpdateError
 
-part = Catia.attach().active_part()
+part = Catia.attach().part_named("MY_PART")
 pad = part.part_design.get_pad("BASE")
-
-pad.deactivate()                         # the feature stays in the tree
+previous = pad.length
+pad.length = 1.0
 try:
     part.update()
 except PartUpdateError as error:
-    # Dependants show as not up to date; the cause is this suppression.
-    print([issue.name for issue in error.issues])
-    pad.activate()
+    for issue in error.issues:
+        print(issue.name, issue.kind, issue.body_name, issue.up_to_date, issue.active)
+    pad.length = previous
+    part.update()
+    print(part.is_up_to_date())
+    raise
+```
+
+The issues describe affected features, not necessarily the cause. Restore the
+last valid value before considering removal.
+
+### Plane edit, sketch rediscovery, and history position
+
+```python
+from auto_3dx import Catia
+
+part = Catia.attach().part_named("MY_PART")
+plane = part.planes.get("BOSS_PLANE")
+previous_offset = plane.offset
+plane.offset = 8.0
+part.update()
+print(previous_offset, part.planes.dependents(plane))
+
+sketch = part.sketches.get("RIB_PROFILE")
+print(sketch.element_names())
+line = sketch.get_element("Line.1")
+print(line.geometry())  # read only after the sketch edition is closed
+with part.work_at(part.part_design.get_pad("BASE")):
+    part.part_design.create_pad("RIB", sketch, 6.0)
+part.update()
+```
+
+This assumes `BOSS_PLANE` is an offset plane and the named sketch and base Pad
+already exist. `work_at` chooses insertion position and restores prior context.
+
+### Another body and a consuming boolean
+
+```python
+from auto_3dx import Catia
+
+part = Catia.attach().part_named("MY_PART")
+tool = part.bodies.create("TOOL_BODY")
+with part.work_in(tool):
+    sketch = part.sketches.create("TOOL_PROFILE", support="XY")
+    with sketch.edit() as editor:
+        editor.rectangle(40.0, 30.0)
+    part.part_design.create_pad("TOOL_PAD", sketch, 20.0)
+tool.update()
+print(part.measurement.measure(tool).volume_mm3)
+
+housing = part.bodies.get("HOUSING")
+with part.work_in(housing):
+    cut = part.part_design.create_boolean_remove("CUT_TOOL", tool)
+part.update()
+print(cut.operation, cut.tool_body_name, part.bodies.names())
+```
+
+The boolean consumes `TOOL_BODY` permanently. Use this pattern only when the
+user intends that consumption and the tool geometry intersects the housing.
+
+### Pattern revision and reversible suppression
+
+```python
+from auto_3dx import Catia, PartUpdateError
+
+part = Catia.attach().part_named("MY_PART")
+seed = part.part_design.get_pocket("BOLT_HOLE")
+pattern = part.part_design.create_circular_pattern(
+    "BOLT_CIRCLE", seed, 6, 60.0, axis="Z"
+)
+part.update()
+pattern.instances = 8
+part.update()
+print(pattern.instances, pattern.spacing_deg)
+
+fillet = part.part_design.get_edge_fillet("EDGE_ROUND")
+fillet.deactivate()
+try:
+    part.update()
+except PartUpdateError:
+    fillet.activate()
     part.update()
     raise
-# Any topology snapshot taken before this is stale: take a fresh one.
 ```
+
+Suppression changes the model generation. A topology handle from before it
+must be reselected. Restore the prior active state if the rebuild fails.
