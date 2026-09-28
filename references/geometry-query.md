@@ -1,7 +1,9 @@
 # Geometry facts and semantic queries
 
-How to say *which* face or edge a command acts on. Upstream contract:
-`docs/api-design.md` section 19. This is the default way to select topology:
+How to say *which* face or edge a command acts on. Prefer
+`part.geometry.top_face()` and other semantic finders when they express the
+intent. Use this composable Level 2 route when a finder cannot express the
+needed combination:
 
 ```text
 engineering intent -> semantic query -> strict cardinality (one()) -> operation
@@ -9,6 +11,14 @@ engineering intent -> semantic query -> strict cardinality (one()) -> operation
 
 Never `faces[0]`, never `edges[3]`, never parsing `descriptor` strings. Indices
 and descriptors remain available for diagnostics only.
+
+For a top face, `part.geometry.top_face()` implements planar + unsigned normal
+parallel to Z + maximum Z position. The fallback below expresses the same rule:
+
+```python
+top = part.topology.faces(body=part.bodies.main).query().planar() \
+    .normal_parallel((0, 0, 1)).extreme((0, 0, 1)).one()
+```
 
 ## Measured facts
 
@@ -111,6 +121,13 @@ Within one valid generation, **reuse** a measured snapshot: facts are measured
 once per handle, and re-querying an already measured snapshot is cheap, while a
 fresh snapshot plus measurement costs on the order of a second on a small part.
 Never reuse one across a mutation — `StaleSnapshotError` is the guard.
+
+## Plane coincidence is not adjacency
+
+`part.geometry.find_edge(on_plane_of=face, ...)` and
+`EdgeQuery.on_plane_of(face)` keep edges whose measured points lie on a planar
+face's plane. They do not establish that the edge bounds that face. True
+face-edge adjacency remains unsupported.
 
 ## Not covered
 

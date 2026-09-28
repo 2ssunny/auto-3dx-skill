@@ -1,7 +1,9 @@
 # Part Design operations
 
-Pad and Pocket direction, patterns, multi-body booleans, constraint removal and
-feature suppression. Upstream contract: `docs/api-design.md` sections 18–19.
+Prefer `body.features.*` for Pad, Pocket, Hole, Fillet, Chamfer, and Circular
+Pattern. This page covers their Level 2 fallback and advanced operations,
+multi-body booleans, constraint removal, and suppression. The public Level 2 API
+is fully supported; see also [high-level-api.md](high-level-api.md).
 
 ## Pad and Pocket direction
 
@@ -37,12 +39,12 @@ seed = part.part_design.get_pocket("BOLT_HOLE")
 pattern = part.part_design.create_circular_pattern("BOLT_CIRCLE", seed, 6, 60.0)
 part.update()
 
-pattern.set_angular_instances(8)        # no rebuild here either
+pattern.instances = 8                   # preferred property; no rebuild yet
 part.update()
 ```
 
 - Signature: `create_circular_pattern(name, feature, angular_instances,
-  angular_spacing_deg, axis="Z")`.
+  angular_spacing_deg, axis="Z", reverse=False)`.
 - Lifecycle: `circular_patterns`, `get_circular_pattern(name)`,
   `remove_circular_pattern(name)`. Patterns are found again by name in a fresh
   process.
@@ -52,11 +54,10 @@ part.update()
 - The seed feature must belong to the body being patterned in, checked with the
   same ownership machinery as topology (`CrossBodyReferenceError`).
 
-**Axis: only `"Z"` is supported.** Passing the XY plane as both rotation centre
-and axis patterned around Z and removed exactly the expected material; the other
-two origin planes rotated about something the test geometry could not identify.
-`axis` therefore accepts `"Z"` and refuses anything else with
-`UnsupportedSupportError`. Do not assume `"X"` or `"Y"`.
+Verified axes: `"X"`, `"Y"`, `"Z"`, a cylindrical `Face`, or a linear `Edge`.
+`reverse=True` flips the rotation; its directional sense has been established
+for Z only. CATIA's complete-crown mode did not change the geometry in the live
+probe; use spacing or the high-level `total_angle_deg` conversion instead.
 
 ## Multi-body booleans
 

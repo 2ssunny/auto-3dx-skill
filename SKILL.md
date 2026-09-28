@@ -1,196 +1,106 @@
 ---
 name: auto-3dx
-description: Operating contract for driving a running 3DEXPERIENCE CATIA session through the auto-3dx Python SDK — attach, inspect an open Part, then create and edit parameters, formulas, sketches, planes, bodies, patterns, booleans and Part Design features, rebuild, and verify, without saving or bypassing the SDK's safety checks. Use when the user wants to read, modify, or build CAD geometry in 3DEXPERIENCE or CATIA from Python, mentions auto-3dx or auto_3dx, or asks for pads, pockets, fillets, holes, bolt circles, sketches, parameters, bodies or measurements on a live Part.
+description: Use the public auto-3dx Python SDK to inspect or edit an open 3DEXPERIENCE CATIA Part. Applies to live CAD modeling, sketches, Part Design features, semantic topology selection, measurements, and safe recovery; the SDK is authoritative for signatures and mechanics.
 ---
 
-# auto-3dx — 3DEXPERIENCE CATIA automation
+# auto-3dx — agent operating contract
 
-`auto-3dx` (import name `auto_3dx`) is the Python SDK that drives a running
-3DEXPERIENCE CATIA session over Windows COM. This skill tells you how to use it
-safely. It is not the API reference: signatures come from the installed package
-(`help(...)`, docstrings) and, when available, its `docs/api-design.md`. **If
-this skill and the installed package disagree, the package wins** — follow the
-package and report the drift.
+**Prefer the highest-level public auto-3dx API that precisely expresses the engineering intent.**
+Use the composable low-level public API when the intent API cannot express it. Never bypass
+either layer with raw COM, private SDK code, topology indices, or descriptor strings during
+ordinary CAD work. The installed SDK wins if this skill differs from it; report the drift.
 
-When the task is changing the SDK itself (inside the `auto-3dx` repository),
-that repository's own contract and probe workflow govern instead of this skill.
+## Start and choose an API
 
-## Preconditions
+- Use the project's configured 64-bit Python 3.11+ environment on Windows. Confirm
+  `auto_3dx` is importable there; do not silently switch interpreters. Attach to an already
+  running 3DEXPERIENCE session and an already open Part. The SDK does not create PLM Parts.
+- `Catia.attach()` then explicitly choose the target with `catia.part_named(name)` when
+  several editors exist. `catia.active_window_title` can help confirm the UI document;
+  `active_part()` is suitable only when the target is unambiguous.
+- **Level 3, preferred:** `body.features.pad/pocket/hole/fillet/chamfer/circular_pattern`,
+  `sketch.rectangle/centered_rectangle/circle`, `part.geometry.*`, `part.inspect.facts(...)`,
+  and verified writable feature properties.
+- **Level 2, supported fallback:** `part.sketches.create`, `sketch.edit()` and editor methods,
+  `part.part_design.create_*`, `part.topology.*`, `snapshot.query()`, explicit setters/getters,
+  and `part.measurement.measure()`. Use it for uncommon intent, composition beyond a helper,
+  debugging, or a missing Level 3 abstraction. It is not deprecated.
+- **Level 1 is off limits for ordinary modeling:** `win32com`, `com3dx`, `com_object`
+  mutation, `ShapeFactory`, `Selection`, raw Automation, and private SDK implementation.
+  An unsupported public operation is a finding to report, not permission to bypass the SDK.
 
-- Windows, 64-bit Python 3.11+, and a running 3DEXPERIENCE session with the
-  target Part **already open and active**. The SDK attaches only: it cannot
-  launch a session or create a Part or Product.
-- **Python environment.** Use the interpreter the current project is configured
-  with (its venv, Conda environment, or other documented convention) that has
-  `auto_3dx` installed. Conda is one valid option, not a requirement: do not
-  assume Conda, Anaconda, an environment name, or a machine-specific path, and
-  do not create a new environment when one is configured. Confirm with
-  `python -c "import auto_3dx; print(auto_3dx.__file__)"`, then `help()` on the
-  class you need. If `auto_3dx` is not importable there, report that it is not
-  installed and follow the project's conventions — do not silently switch
-  interpreters.
-- `com3dx` ships with the 3DEXPERIENCE installation; it is not a pip package and
-  `Catia.attach()` finds it. Do not pip-install it, import it, or edit
-  `sys.path` for it. Confirm you are pointed at the right document with
-  `catia.active_window_title`, never a raw window read.
-
-## Workflow
+## Preferred workflow
 
 ```text
-inspect -> rediscover by name -> choose body/history context -> fresh topology
-  -> semantic query -> one() -> one logical mutation -> explicit update
-  -> on failure: read issues, roll back -> measure/query/verify -> repeat
+attach -> select Part explicitly -> cheap targeted inspection -> choose highest applicable
+public API -> group deterministic edits -> part.update() -> targeted verification ->
+full topology or geometry validation when the task needs it
 ```
 
-1. **Attach and choose the Part.** `Catia.attach()`; `ActiveEditor` does not
-   reliably follow the UI tab, so with several editors open use
-   `catia.part_named(name)`. If the right Part is unclear, ask.
-2. **Inspect before editing.** `part.inspect.summary()` reports the Part name,
-   rebuild status, main-body features (`kind`, `supported`), sketch names, user
-   parameters, every body, geometrical sets, edge and face counts, and the
-   In-Work Object. If `up_to_date` is already `False`, report it before stacking
-   changes.
-3. **Rediscover, never remember.** The CATIA model is the source of truth. Find
-   bodies, sketches, sketch elements, parameters, formulas, features, patterns
-   and constraints by name each time; a Python handle from an earlier process is
-   worthless (topology snapshots are process-local, see below).
-4. **Choose the context.** `with part.work_in(body):` picks which body to model
-   in; `with part.work_at(feature):` picks where in that body's history the next
-   feature goes. Outside a block nothing touches the In-Work Object.
-5. **Make one logical mutation** through the public API, then rebuild. Avoid
-   large blind batches of geometry with no intermediate verification.
-6. **Rebuild explicitly.** `part.update()` rebuilds the whole Part;
-   `body.update()` or `part.update(body)` rebuilds one object without moving the
-   In-Work Object. No `create_*`, `ensure_*`, `set_*`, `activate`/`deactivate` or
-   `remove_*` call rebuilds on its own.
-7. **Verify.** Check `part.is_up_to_date()` or `body.is_up_to_date`, re-read what
-   you set, and compare `part.measurement.measure()` before and after. Measuring
-   a target CATIA has not rebuilt raises `TargetNotUpToDateError`: rebuild first,
-   because measurement never rebuilds for you.
+1. Read only the facts needed to establish the baseline, usually
+   `part.inspect.facts("up_to_date", "volume")`; check names or body context separately
+   when relevant. If the model is already dirty, report that before editing.
+2. Choose the body and feature history context. Level 3 `body.features.*` selects its body;
+   Level 2 uses `with part.work_in(body):` and, when necessary, `part.work_at(feature)`.
+   Rediscover persistent model objects by name in a new process.
+3. Complete a logical sketch or deterministic edit group, close any `sketch.edit()` block,
+   then call `part.update()`. Mutations and property assignments never implicitly rebuild.
+   Rebuild earlier when rebuilt topology is needed for the next selection.
+4. Verify the intended effect with targeted facts, property read-back, or a semantic query.
+   A successful rebuild alone does not prove a Pocket removed material. Use
+   `part.inspect.summary()`, topology snapshots, or full measurement for semantic discovery,
+   detailed final validation, failure diagnosis, or an explicit request.
 
-For a risky edit, record the previous valid value first, then modify → update →
-roll back and update again if it fails. After any geometry-changing rebuild,
-take a fresh snapshot and re-run the query; never carry a face or edge forward.
+## Geometry and sketch rules
 
-## Public API only
+- Prefer `part.geometry.top_face()` for the top face. Its meaning is planar, **unsigned**
+  normal parallel to global Z, then highest spatial extreme. A plane normal is not an
+  outward solid normal. Never use first face, a face index, a descriptor, or normal sign.
+- For a query beyond a finder, use one body-scoped snapshot and compose `snapshot.query()`;
+  require `.one()` for a single entity. Reuse a valid snapshot and its measured facts within
+  one generation. After a geometry-changing edit, reselect from a fresh snapshot.
+- `on_plane_of(face)` means an edge lies on that face's plane. It does **not** prove the edge
+  bounds the face; true face-edge adjacency is unsupported.
+- A sketch can use an origin/user plane or a planar `Face`. On a face, use `sketch.frame()`
+  to convert between global and sketch-local coordinates; the frame origin need not be the
+  face centre. `sketch.rectangle(..., constraints="none"|"orientation"|"dimensioned")`
+  and `centered_rectangle` are not fully constrained: even `dimensioned` does not create
+  corner coincidence constraints. Complete the logical sketch, close the edition, then use
+  `sketch.geometry()` or `element.geometry()` for read-back. Do not read geometry in an
+  active edit session.
 
-- From the package root import only `Catia`, `Part` and the error categories
-  (`Auto3dxError`, `SessionError`, `ValidationError`, `NotFoundError`,
-  `ConflictError`, `AutomationError`, `PartUpdateError`, `StaleSnapshotError`).
-  Reach everything else through attributes (`part.sketches`, `part.bodies`,
-  `part.part_design`, `part.topology`, ...); import specific errors from
-  `auto_3dx.errors`.
-- Never use `part.com_object`, `catia.com_object`, `win32com`, `com3dx`,
-  `ShapeFactory`, `HybridShapeFactory`, `Selection`, `MeasurableService`, or
-  private `_…` members to do ordinary CAD work, and never select topology by
-  index or by parsing `descriptor` strings. `com_object` is the single escape
-  hatch and is for read-only reads the SDK itself points to, such as a
-  `SketchElement`'s radius.
-- Raw Automation is appropriate **only** during explicit SDK-development or
-  capability-probe work inside the auto-3dx repository.
-- **If an ordinary modelling task reaches a missing public capability: stop and
-  report the SDK gap.** Do not silently bypass it. Unsupported areas are listed
-  in [references/capabilities.md](references/capabilities.md).
+## Update, inspection, and recovery
 
-## Core safety rules
+- Call `part.update()` at a logical boundary, before a dependent topology selection, and
+  before update-sensitive verification. Do not update after each sketch line.
+- Prefer `part.inspect.facts(...)` for routine checks; it avoids a topology search. Full
+  `summary()` and snapshots cost more and should answer a concrete question. Do not treat
+  measured Phase 5 timings as universal guarantees.
+- Distinguish validation, not found, ambiguity, unsupported capability, stale snapshot,
+  update failure, dependency in use, and Automation errors. Fix the cause or refine intent;
+  never route around a typed refusal with raw COM. On `PartUpdateError`, inspect
+  `error.issues` or `part.inspect.update_issues()` as symptoms, restore the last valid
+  reversible value and update again. Remove a newly created invalid feature only when
+  rollback is unavailable. Do not delete downstream features to force a rebuild.
+- The SDK does not save or export. Tell the user edits remain unsaved. Destructive removal
+  needs user intent for the named object; boolean tool bodies are consumed permanently.
 
-- **Select topology by geometric intent.** Query a body-scoped snapshot by
-  measured facts and require `one()` — "the planar face parallel to Z that is
-  highest along Z", not `faces[0]`. No match means the assumptions are wrong;
-  several means the intent is underspecified. Never settle it with an index,
-  `first()` or descriptor parsing. **Plane normals are not outward**: decide top
-  or bottom by position. Details:
-  [references/geometry-query.md](references/geometry-query.md).
-- **Topology is transient and body-owned.** Take a fresh snapshot before every
-  topology-consuming call, including after suppression, direction changes and
-  plane edits. `current_owner_feature_name` is the current owner, not the feature
-  that created an edge, and an unknown `owner_body_name` is unknown — not the main
-  body. Details: [references/topology.md](references/topology.md).
-- **Update failure is repaired, not deleted.** See below.
-- **Editing beats recreating.** Verified feature dimensions are editable in
-  place; sketch elements are rediscovered by name; a parameter a formula reads is
-  protected from removal. Details:
-  [references/editing.md](references/editing.md).
-- **Some operations consume or invalidate other objects.** A boolean consumes its
-  tool body permanently; suppression can break downstream features. Details:
-  [references/part-design.md](references/part-design.md).
-- **A successful rebuild does not prove intent.** A Pocket in CATIA's default
-  direction can cut nothing and still rebuild. Pass `direction=` when it matters
-  and verify by volume or by a query.
-- **Reference planes are editable and guarded.** `set_offset` / `set_angle`, then
-  `part.update()`. A plane a sketch still uses is refused for removal
-  (`ReferenceInUseError`): remove the feature and its sketch first.
-- `editor.rectangle()` draws four unconstrained lines; add constraints yourself
-  when the profile must stay rectangular under edits.
-- Selection-based operations (topology search, `remove_*`, body visibility,
-  constraint removal) need the **active** Part, or `InactivePartError`.
-- A plane from `part.planes` cannot support a sketch until it has been rebuilt:
-  `SupportNotUpdatedError` means `part.update()`, then create the sketch — not a
-  blind retry.
-- Reading an `EnumParam` works, so parameter listing is not broken by one.
-  Writing one is not supported.
+## Agent performance traps
 
-## Update failure and recovery
+Avoid a full summary after every mutation, a fresh topology snapshot when no topology is
+needed, a new decision for each deterministic sketch line, update after every entity,
+recreating a query within one valid snapshot, raw COM after `UnsupportedOperationError`
+or another typed refusal, and repeated source exploration after the API contract is known.
 
-`PartUpdateError` means the model is invalid and every later rebuild fails until
-it is repaired. **Repair first; deletion is the last resort.** Nothing is rolled
-back or deleted automatically.
+## Read the detail that fits the task
 
-1. Stop mutating. Read `error.issues` (or `part.inspect.update_issues()`) to see
-   what is affected — symptoms, not the cause — then identify the edit the
-   failure followed.
-2. **A reversible edit to a previously valid model** — a dimension, parameter,
-   formula value, or a suppression you just applied: restore the previous value
-   or state and rebuild again. CATIA heals the model and dependent features
-   survive.
-3. Confirm with `part.is_up_to_date()`, or `body.is_up_to_date` for one body.
-4. **A newly created feature that never rebuilt**, or an edit whose previous
-   value is unknown, or a rollback that itself failed: remove the offending
-   feature with its `remove_*` method, then rebuild.
-5. Report what failed and what you did. Not every update failure is recoverable;
-   do not promise otherwise, and never delete downstream features to force one
-   through.
-
-## Multi-body work
-
-```python
-body = part.bodies.create("ToolBody")
-with part.work_in(body):
-    sketch = part.sketches.create("TOOL_PROFILE", support="XY")
-    part.part_design.create_pad("TOOL_PAD", sketch, 20.0)
-body.update()
-edges = part.topology.edges(body=body)
-properties = part.measurement.measure(body)
-```
-
-`part.bodies` offers `list`, `names`, `get`, `main`, `create`,
-`remove(name, delete_contents=False)`, plus per-body `hide()` / `show()` /
-`is_visible`. Bodies are re-found in the model. Leaving a `work_in` block
-rebuilds nothing, so update the body before measuring it. The main body is never
-removed, and removing a body with content needs `delete_contents=True`, which
-deletes everything inside it.
-
-## Persistence and destructive actions
-
-- The SDK never calls `Save()` or `PLMPropagate()` and has no export API. Edits
-  live in the session until the user saves in the UI, where a save commits to the
-  server with every other unsaved change. Never save, propagate or export on the
-  user's behalf; when work is done, say it is unsaved.
-- Deleting geometry, parameters, formulas, constraints or bodies you did not
-  create in this task requires explicit user intent naming the object. Remember
-  the cascades: removing a Pad removes its sketch, `delete_contents=True` empties
-  a body, and `remove_boolean(..., delete_consumed_body=True)` destroys the
-  consumed tool body for good.
-
-## References
-
-| File | Contents |
-|---|---|
-| [capabilities.md](references/capabilities.md) | What is supported, partially supported, and not |
-| [safety.md](references/safety.md) | Errors, generation, removal side effects, raw-COM policy |
-| [geometry-query.md](references/geometry-query.md) | Measured face/edge facts, semantic queries, strict cardinality |
-| [topology.md](references/topology.md) | Body-scoped topology, ownership, staleness |
-| [editing.md](references/editing.md) | Feature dimensions, sketch rediscovery, `work_at`, reference planes, parameter dependencies |
-| [part-design.md](references/part-design.md) | Pad/Pocket direction, circular pattern, booleans, constraint removal, suppression |
-| [examples.md](references/examples.md) | Minimal end-to-end patterns |
-| [upstream-sync.md](references/upstream-sync.md) | Maintenance: last reviewed SDK state |
+- [High-level API and inspection](references/high-level-api.md): intent calls, properties,
+  targeted facts, and Level 2 mappings.
+- [Examples](references/examples.md): block, face sketch and Pocket, Hole, edge feature,
+  revision, targeted inspection, and low-level fallback.
+- [Geometry queries](references/geometry-query.md) and [topology](references/topology.md):
+  semantic selection, ownership, staleness, and strict cardinality.
+- [Part Design](references/part-design.md), [editing](references/editing.md), and
+  [capabilities](references/capabilities.md): feature limits and supported fallback paths.
+- [Safety](references/safety.md): typed errors, side effects, recovery, and persistence.
+- [Upstream sync](references/upstream-sync.md): exact SDK revision and review evidence.

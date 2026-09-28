@@ -12,7 +12,7 @@ that is editable — recreating re-resolves the edges or faces it consumes.
 ```python
 fillet = part.part_design.get_edge_fillet("F1")
 previous = fillet.radius          # keep the old value for rollback
-fillet.set_radius(8.0)            # no rebuild happens here
+fillet.radius = 8.0                # preferred; no rebuild happens here
 part.update()
 ```
 
@@ -21,7 +21,7 @@ geometry change, re-read from a fresh wrapper):
 
 | Feature | Read | Write |
 |---|---|---|
-| `ConstRadEdgeFillet` | `radius` | `set_radius(value, unit="mm")`, `radius_parameter()` |
+| `ConstRadEdgeFillet` | `radius` | `radius = value`; `set_radius(value, unit="mm")` for explicit units |
 | `Chamfer` | `length1`, `angle` | `set_length1(...)`, `set_angle(..., unit="deg")` |
 | `Hole` | `diameter`, `depth` | `set_diameter(...)`, `set_depth(...)` |
 | `Shell` | `internal_thickness`, `external_thickness` | `set_internal_thickness(...)`, `set_external_thickness(...)` |
@@ -32,6 +32,11 @@ geometry change, re-read from a fresh wrapper):
 Setters validate, advance the generation, and **do not rebuild**, so several
 edits batch into one `part.update()`. Measuring before that rebuild correctly
 fails with `TargetNotUpToDateError`.
+
+Prefer property assignments for `pad.length`, `pocket.depth`, `fillet.radius`,
+`chamfer.length1`/`angle`, `hole.diameter`/`depth`, `plane.offset`/`angle`, and
+`pattern.instances`/`spacing_deg`. Use the explicit `set_*` method when its
+advanced arguments matter. Assignment never calls `part.update()`.
 
 **Not editable** (verified absent, not merely untried):
 
@@ -60,8 +65,9 @@ it goes straight back into the constraint methods — which still require an ope
 `with sketch.edit()` block. Reading does not.
 
 - `radius` is exposed for circles because it reads live.
-- **Line coordinates are not exposed**: this release's `Line2D` has no
-  coordinate members. Do not claim a coordinate getter exists.
+- `line.geometry()` reads start/end points and length after the sketch edition
+  closes. `sketch.geometry()` also returns a value-only sketch summary. Reading
+  while that sketch's edition is open is refused before COM.
 - Live-verified rediscovered kinds include `Line2D`, `Circle2D` and the sketch
   axis.
 

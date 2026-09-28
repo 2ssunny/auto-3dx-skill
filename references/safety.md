@@ -57,7 +57,10 @@ Specific errors and the correct response:
 | `SketchElementNotFoundError` | Re-read `sketch.element_names()`; the name changed or the element is gone |
 | `ParameterInUseError` | Remove the dependent formula first, or get explicit intent for `force=True` |
 | `BooleanOperationError` | Check the tool body: it must not be the target, from another Part, or already consumed |
-| `UnsupportedSupportError` | An unsupported plane or axis (for example a circular-pattern axis other than `"Z"`) |
+| `UnsupportedSupportError` | An unsupported sketch support or axis; check the supported public choices before retrying |
+| `UnsupportedOperationError` | An intent the SDK cannot verify or express, such as Hole reversal or multi-edge intent Fillet; report the capability gap |
+| `UnknownFactError` | Use a fact name supported by `part.inspect.facts(...)` |
+| `FactUnavailableError` | A requested fact cannot be read in the current model state; inspect the stated reason |
 | `InactivePartError` | Activate the Part in CATIA and retry |
 | `TopologyQueryNoMatchError` | The query's assumptions are wrong: read the candidate facts in the message and fix the criteria |
 | `TopologyQueryAmbiguousError` | The intent is underspecified: add a criterion. Never fall back to `first()` or an index |
@@ -185,11 +188,11 @@ the session, not only this task's.
 
 ## 8. Raw COM
 
-`wrapper.com_object` is the only escape hatch. It bypasses validation, generation
-tracking and ownership checks, and a normal workflow never needs it.
+`wrapper.com_object` bypasses validation, generation tracking and ownership
+checks. A normal modeling workflow does not use it.
 
-- Allowed in ordinary work: read-only property reads the SDK documents as living
-  behind `com_object`.
+- For ordinary work, use the public geometry, sketch read-back, inspection and
+  measurement APIs. Do not use `com_object` to fill a perceived capability gap.
 - Not allowed in ordinary work: any raw mutation, raw topology handling, raw save
   or export, reaching for `ShapeFactory`, `HybridShapeFactory`, `Selection`,
   `MeasurableService` / `MeasureService`,
