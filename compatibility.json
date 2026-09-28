@@ -1,0 +1,10 @@
+{
+  "skill_version": "2.0.0",
+  "reviewed_on": "2026-09-28",
+  "sdk_repository": "2ssunny/auto-3dx",
+  "sdk_branch": "feat/phase5-high-level-api",
+  "sdk_commit": "d8bf8195e8108fd5b581accd9e770c6bb3c33b65",
+  "sdk_package_version": "0.1.0",
+  "public_api_expectation": "Phase 5 public Level 3 intent API and composable Level 2 API; verify against the installed SDK, which is authoritative",
+  "sdk_worktree_note": "sdk_commit is the pushed Phase 5 finalization commit. It changes only README and docs relative to 3342a4b, where the Phase 5 code and live acceptance landed; src, tests, examples, scripts and pyproject.toml are identical"
+}

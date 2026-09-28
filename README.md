@@ -3,10 +3,11 @@
 The agent skill for [auto-3dx](https://github.com/2ssunny/auto-3dx), the Python
 SDK that drives a running 3DEXPERIENCE CATIA session over Windows COM.
 
-The skill is the operating contract an AI coding agent follows when it uses the
-SDK: attach to the session, inspect the open Part, make one logical change
-through the public API, rebuild explicitly, verify, and recover safely — without
-raw COM, without saving, and without bypassing the SDK's safety checks.
+Skill v2 is the operating contract an AI coding agent follows when it uses the
+stabilized Phase 5 SDK: attach to the session, choose the open Part, inspect
+targeted facts, prefer the highest-level public API that expresses the intent,
+group deterministic edits, rebuild explicitly, verify, and recover safely.
+The composable public API remains the fallback for more specific work.
 
 **This repository is the single source of truth for the `auto-3dx` skill.** Edit
 the skill here and nowhere else. Agents and other repositories expose it by
@@ -32,9 +33,10 @@ permission to fall back to raw COM.
 SKILL.md              entry point: frontmatter (name, description) + workflow and core rules
 agents/openai.yaml    display metadata for Codex
 references/           detail loaded on demand (capabilities, safety, geometry queries,
-                      topology, editing, Part Design, examples, upstream sync record)
+                      topology, intent API, editing, Part Design, examples, upstream sync)
+compatibility.json    Skill v2 / exact reviewed SDK commit and compatibility expectation
 scripts/validate_skill.py
-                      document contract + API check against the installed SDK
+                      document contract + syntax and API checks against the installed SDK
 ```
 
 ## Supported agents
@@ -88,25 +90,25 @@ It runs two checks and prints which interpreter and which `auto_3dx` it used:
 
 1. **Document contract** (standard library only): frontmatter keys and name,
    `SKILL.md` length, every relative Markdown link resolves inside the
-   repository, no machine-specific user paths, no reference to the skill's
+   repository, valid compatibility metadata, high-level-first and explicit
+   update rules, no machine-specific user paths, no reference to the skill's
    retired location.
 2. **API check** (needs `auto_3dx` importable): every Python example in
    `SKILL.md` and the code-bearing references is checked against the installed
    package — members exist, arguments bind to real signatures, package-root
-   imports come from `auto_3dx.__all__`, and no retired name is taught.
+   imports come from `auto_3dx.__all__`, Phase 5 public symbols exist, and no
+   retired or raw-COM name is used in examples.
 
 Without `auto_3dx` the API check reports **SKIPPED**, which is not a pass. The
 validator never searches for another interpreter.
 
 ## SDK compatibility
 
-[`references/upstream-sync.md`](references/upstream-sync.md) records the SDK
-state the skill was last reviewed against — upstream commit, phase, package
-version, test evidence — and the procedure for the next sync. Nothing in the
-skill depends on that commit at runtime; the installed package is always
-authoritative. When the SDK changes, review its diff since the recorded commit,
-update the smallest affected part of the skill, re-run the validator against the
-new installation, and update the record.
+[`compatibility.json`](compatibility.json) records Skill v2, the exact SDK
+commit reviewed, its package version, and the public API expectation.
+[`references/upstream-sync.md`](references/upstream-sync.md) records the review
+evidence and next-sync procedure. The Skill and SDK version numbers need not
+match. The installed package is authoritative at runtime.
 
 ## History
 
