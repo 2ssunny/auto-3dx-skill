@@ -26,6 +26,9 @@ edge and only fail at the next rebuild.
 | Property | Meaning |
 |---|---|
 | `geometry` | Measured facts — the basis for selection (`geometry-query.md`) |
+| `describe()` | One line of measured facts and current owner, for messages and the user |
+| `distance_to(point)` | Face only: shortest distance to the bounded face, in mm |
+| `from_sketch` | Edge only: `True` for a consumed sketch's profile edge, `False` for the solid's, `None` when undecidable |
 | `owner_body`, `owner_body_name` | The body the reference belongs to, or `None` when unknown |
 | `current_owner_feature_name` | The feature CATIA **currently** reports as the owner |
 | `owner_feature_name` | Older alias of the same value; prefer the explicit name |
@@ -58,9 +61,21 @@ raises `CrossBodyReferenceError` **before** calling CATIA. Treat it as a
 targeting mistake: take a snapshot of the right body. When ownership is unknown,
 the guard allows the call through rather than refusing on a missing answer.
 
-A body's edges include the **wire edges of sketches its features consumed**,
-which a fillet or chamfer cannot use. Semantic queries on the solid's edges
-(`lines()`, `circular()`, position, length) are how to pick a solid edge.
+A body's edges include the **profile edges of sketches its features consumed**
+(live: a block's search returned its 12 edges plus the profile's 4). They
+coincide with solid edges but bound no face, and a fillet or chamfer cannot use
+them. They carry `edge.from_sketch is True`; `EdgeQuery.solid()` drops them, and
+`part.geometry.edges()`, `find_edge()`, `edges_of()` never return them.
+`part.topology.edges(...).query()` keeps them unless you add `.solid()`.
+
+## Selected elements
+
+`part.selection.one_edge()`, `one_face()`, `edges()` and `faces()` return
+ordinary `Edge`/`Face` handles stamped with the current generation, with the
+same ownership and staleness rules as snapshot handles. They go stale after the
+next mutation, so re-find the element by description after a rebuild rather
+than asking the user to click again. Their `index` is the selection position,
+not a snapshot index.
 
 ## Staleness
 
@@ -85,4 +100,5 @@ index, since the same index can now be a different edge.
   description on a fresh snapshot; nothing is stored.
 - Snapshots restore the user's CATIA selection; `SelectionNotRestoredWarning`
   means only UI selection was lost (safety.md §6).
-- Topology search needs the **active** Part, or `InactivePartError`.
+- Topology search and `part.selection` need the **active** Part, or
+  `InactivePartError`.
