@@ -74,12 +74,17 @@ query: every step returns a new query, so a partial query can be reused.
 
 | Step | Face query | Edge query |
 |---|---|---|
-| Type | `of_type(surface_type)`, `planar()`, `cylindrical()` | `of_type(curve_type)`, `lines()`, `circular()` (circle or arc) |
+| Type | `of_type(surface_type)`, `planar()`, `cylindrical()` | `of_type(curve_type)`, `lines()`, `circular()` (circle or arc), `solid()` (drop sketch profile edges) |
 | Orientation | `normal_parallel(axis, tolerance_deg=1.0)` | `parallel(axis, tolerance_deg=1.0)` |
 | Size | `radius_near(radius_mm, tolerance_mm=0.001)`, `area_between(minimum_mm2=None, maximum_mm2=None)`, `largest(tolerance_mm2=0.001)`, `smallest(...)` | `radius_near(radius_mm, tolerance_mm=0.001)`, `length_between(minimum_mm=None, maximum_mm=None)`, `longest(tolerance_mm=0.001)`, `shortest(...)` |
 | Position | `nearest(point, tolerance_mm=0.001)`, `extreme(direction, tolerance_mm=0.001)` | same; a circle's position is its centre, other edges their midpoint |
+| Adjacency | `adjacent_to(edge, tolerance_mm=0.001)` — faces the edge bounds | `adjacent_to(face, tolerance_mm=0.001)` — edges bounding the face |
 | Owner | `owned_by(feature_name)` — **current** owner, not provenance | same |
 | Result | `one()`, `first()`, `all()`, `count()`, `len(query)` | same |
+
+Direction arguments (`normal_parallel`, `parallel`, `extreme`) accept three
+numbers or a world axis name such as `"X"` or `"-Z"`, the same words the
+`part.geometry` finders take.
 
 ```python
 edges = part.topology.edges(body="PartBody")
@@ -102,8 +107,9 @@ When the engineering intent is exactly one entity, use `one()`:
 | Zero matches | `TopologyQueryNoMatchError` (a `NotFoundError`) | The query's assumptions about the model are wrong |
 | Several matches | `TopologyQueryAmbiguousError` (a `ConflictError`) | The intent is underspecified — add a criterion |
 
-Both messages list the query steps and the measured facts of the candidates;
-read them before refining the query. `first()` is an explicit decision to accept
+Both messages list the query steps and each candidate's `describe()` line
+(measured facts and current owner, never an index or BRep name); read them
+before refining the query. `first()` is an explicit decision to accept
 the first of several — do not use it, or `all()[0]`, to silence ambiguity.
 
 If no combination of facts can identify the intended entity, **stop and report
@@ -122,16 +128,37 @@ once per handle, and re-querying an already measured snapshot is cheap, while a
 fresh snapshot plus measurement costs on the order of a second on a small part.
 Never reuse one across a mutation — `StaleSnapshotError` is the guard.
 
-## Plane coincidence is not adjacency
+## Adjacency is measured; plane coincidence is not adjacency
+
+`EdgeQuery.adjacent_to(face)` keeps the edges that bound a face, its outer
+boundary and any hole in it. `FaceQuery.adjacent_to(edge)` keeps the faces an
+edge bounds, normally two. An edge bounds a face when its start, middle and end
+points all measure within the tolerance of the **bounded** face
+(`face.distance_to(point)`), not of its plane. Profile edges of consumed
+sketches (`edge.from_sketch is True`) bound nothing: `EdgeQuery.adjacent_to`
+skips them and `FaceQuery.adjacent_to` refuses one with
+`UnsupportedOperationError`. Face and edge must come from the same Part.
+
+```python
+top = part.geometry.top_face()
+rim = part.geometry.edges_of(top).lines().all()          # the top face's own edges
+edge = part.geometry.find_edge(parallel="X", adjacent_to=top, nearest=(0.0, -20.0, 20.0))
+sides = part.geometry.faces_of(edge).all()               # the two faces that edge joins
+```
+
+`edges_of(face)` and `faces_of(edge)` take a fresh snapshot of the element's
+body and return a query to narrow further. Each candidate costs point-to-face
+measurements, so narrow the other way first when the snapshot is large.
 
 `part.geometry.find_edge(on_plane_of=face, ...)` and
 `EdgeQuery.on_plane_of(face)` keep edges whose measured points lie on a planar
-face's plane. They do not establish that the edge bounds that face. True
-face-edge adjacency remains unsupported.
+face's plane. That is coplanarity only: a neighbouring coplanar face's edges
+and a sketch profile drawn in the plane also qualify. Live, `on_plane_of(bottom)`
+of a block matched eight edges where `edges_of(bottom)` matched four.
 
 ## Not covered
 
 - Cone, sphere, torus, spline and B-surface facts.
-- Outward normals; face or edge adjacency.
+- Outward normals; vertices.
 - Persistent topology identity across mutations or processes.
 - Provenance: which feature *created* an edge.

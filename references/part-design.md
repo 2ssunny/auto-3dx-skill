@@ -2,8 +2,8 @@
 
 Prefer `body.features.*` for Pad, Pocket, Hole, Fillet, Chamfer, and Circular
 Pattern. This page covers their Level 2 fallback and advanced operations,
-multi-body booleans, constraint removal, and suppression. The public Level 2 API
-is fully supported; see also [high-level-api.md](high-level-api.md).
+holes, multi-body booleans, constraint removal, and suppression. The public
+Level 2 API is fully supported; see also [high-level-api.md](high-level-api.md).
 
 ## Pad and Pocket direction
 
@@ -29,6 +29,40 @@ cut.reverse_direction()         # neither setter rebuilds
   semantic query) that material was removed or added. Do not reverse a feature
   through an offset-plane workaround.
 - Direction control covers Pad and Pocket only — not Shaft, Groove or Rib.
+
+## Hole
+
+```python
+from auto_3dx.geometry import Counterbore, Countersink
+
+top = part.geometry.top_face()
+with part.work_in(part.bodies.main):
+    bolt = part.part_design.create_hole(
+        "BOLT", top, 10.0, origin=(5.0, 5.0, 20.0), diameter=6.0,
+        head=Counterbore(diameter=12.0, depth=4.0),
+    )
+part.update()
+bolt.set_head(Countersink(depth=2.0, angle_deg=90.0))   # no rebuild yet
+bolt.set_limit("up_to_next")                             # takes no depth
+part.update()
+print(bolt.hole_type, bolt.head, bolt.limit, bolt.origin)
+```
+
+- Limits: `"blind"` (needs `depth`), `"up_to_next"` (stops at the next face
+  met), `"through_all"`. The last two take no depth, and CATIA rewrites the
+  depth when a hole leaves blind, so `set_limit("blind", depth=...)` needs it.
+- Heads: `Counterbore(diameter, depth)` and `Countersink(depth,
+  angle_deg=90.0)`, from `auto_3dx.geometry`. `head=None` or `set_head(None)`
+  makes a simple hole. `hole_type` reads `"simple"`, `"counterbored"`,
+  `"countersunk"` or `"other"`; `head` reads back the dataclass or `None`.
+- CATIA carries type, limit and bottom from the previous hole, so the SDK always
+  writes limit and type. Pass every other attribute whose value matters.
+- With `origin`, the position is read back before `create_hole` returns and
+  moved once if CATIA snapped it (live: an off-centre hole on a face bounded by
+  one circle landed on the circle's centre).
+  `HolePlacementMismatchError` means it is still wrong and the hole exists
+  under its name: `remove_hole(name)` first. There is no public way to move an
+  existing hole.
 
 ## Circular pattern
 
@@ -56,8 +90,11 @@ part.update()
 
 Verified axes: `"X"`, `"Y"`, `"Z"`, a cylindrical `Face`, or a linear `Edge`.
 `reverse=True` flips the rotation; its directional sense has been established
-for Z only. CATIA's complete-crown mode did not change the geometry in the live
-probe; use spacing or the high-level `total_angle_deg` conversion instead.
+for Z only. CATIA's complete-crown flag did not change the geometry in the live
+probe, so a full circle is written as count and spacing: `full_circle=True` in
+`body.features.circular_pattern`, `pattern.full_circle` to read it, and
+`pattern.set_full_circle(8)` to change the count while keeping 360 degrees.
+Assigning `pattern.instances` alone keeps the old spacing.
 
 ## Multi-body booleans
 

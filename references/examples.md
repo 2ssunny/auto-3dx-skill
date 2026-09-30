@@ -1,10 +1,11 @@
-# Engineering workflows with the public Phase 5 API
+# Engineering workflows with the public auto-3dx API
 
 These are independent patterns for an already open Part. Replace `MY_PART` and
 feature names with the user's actual target and noncolliding names. Each edit
 remains unsaved. The high-level call shapes follow the SDK's
-`examples/intent_api.py`; the fallback follows its public query implementation.
-Use a fresh topology result after a geometry-changing update.
+`examples/intent_api.py` and its v1 live acceptance suite; the fallback follows
+its public query implementation. Use a fresh topology result after a
+geometry-changing update.
 
 ## Simple block
 
@@ -23,8 +24,9 @@ after = part.inspect.facts("volume", "up_to_date")
 print(before["up_to_date"], len(profile.lines), after["volume"])
 ```
 
-`dimensioned` adds horizontal/vertical and length constraints, but the rectangle
-is not fully constrained: it has no corner coincidence constraints.
+`dimensioned` adds horizontal/vertical and length constraints on four
+independent lines, so it is not fully constrained. Use `constraints="fully"`
+when the width or height must be driven later (`editing.md`).
 
 ## Secondary sketch on the top face and Pocket
 
@@ -61,15 +63,99 @@ hole = body.features.hole(
     limit="through_all", bottom="flat",
 )
 body.features.circular_pattern(
-    "BOLT_CIRCLE", feature=hole, instances=6, total_angle_deg=360.0, axis="Z",
+    "BOLT_CIRCLE", feature=hole, instances=6, full_circle=True, axis="Z",
 )
 part.update()
 print(part.inspect.facts("volume", "up_to_date")["up_to_date"])
 ```
 
-For a blind Hole use `depth=...` with `limit="blind"`. `center` may also be a
-global `(x, y, z)` point on the face. A two-value centre is supported for a
-face normal parallel to a world axis. Rebuild before finding fresh topology.
+For a blind Hole use `depth=...` with `limit="blind"`; `limit="up_to_next"`
+stops at the next face. `center` may also be a global `(x, y, z)` point on the
+face. A two-value centre is supported for a face normal parallel to a world
+axis. Rebuild before finding fresh topology.
+
+## Counterbored Hole with targeted read-back
+
+```python
+from auto_3dx import Catia
+from auto_3dx.geometry import Counterbore
+
+part = Catia.attach().part_named("MY_PART")
+body = part.bodies.main
+top = part.geometry.top_face()
+body.features.hole(
+    "CAP_SCREW", support=top, center=(5.0, 5.0), diameter=6.0, depth=10.0,
+    head=Counterbore(diameter=12.0, depth=4.0),
+)
+part.update()
+details = part.inspect.feature("CAP_SCREW")
+print(details.up_to_date, details.parameters["head"], details.parameters["origin"])
+```
+
+`HolePlacementMismatchError` from `hole()` means the hole exists in the wrong
+place; remove it before anything else. `Countersink(depth=2.0, angle_deg=90.0)`
+is the conical head.
+
+## Edges of a face (measured adjacency)
+
+```python
+from auto_3dx import Catia
+
+part = Catia.attach().part_named("MY_PART")
+body = part.bodies.main
+top = part.geometry.top_face()
+rim = part.geometry.edges_of(top).lines().all()
+front = part.geometry.find_edge(parallel="X", adjacent_to=top, extreme="-Y")
+print(len(rim), front.describe())
+print([face.describe() for face in part.geometry.faces_of(front).all()])
+body.features.chamfer("FRONT_BEVEL", edge=front, length=1.0)
+part.update()
+```
+
+`adjacent_to` keeps only edges that bound the face itself. `on_plane_of` would
+also return edges of a neighbouring coplanar face and sketch profile edges.
+
+## Work on the edge the user selected
+
+```python
+from auto_3dx import Catia
+from auto_3dx.errors import SelectionCountError
+
+part = Catia.attach().part_named("MY_PART")
+try:
+    edge = part.selection.one_edge()
+except SelectionCountError as error:
+    print(f"Select exactly one edge in CATIA ({error.count} selected).")
+    raise
+print(edge.describe())
+part.selection.clear()
+part.bodies.main.features.fillet("PICKED_ROUND", edges=[edge], radius=1.0)
+part.update()
+```
+
+The selected edge is an ordinary handle and goes stale after the update.
+To show the user an element instead, call `part.selection.set(element)`; it
+changes only the UI selection.
+
+## Boss on a reference plane offset from a face
+
+```python
+from auto_3dx import Catia
+
+part = Catia.attach().part_named("MY_PART")
+body = part.bodies.main
+top = part.geometry.top_face()
+plane = part.geometry.offset_plane("BOSS_PLANE", face=top, distance=10.0)
+part.update()                                  # a new plane must be built first
+print(plane.origin)
+sketch = part.sketches.create("BOSS_PROFILE", support=plane)
+sketch.circle(center=sketch.frame().to_local(plane.origin), radius=5.0)
+body.features.pad("BOSS", profile=sketch, length=10.0, direction="-Z")
+part.update()
+```
+
+`side="out_of_material"` (the default) put the plane above a top face in the
+live test. The Pad here runs down to the block; verify the added volume.
 
 ## Semantic Fillet or Chamfer
 
@@ -133,8 +219,10 @@ rim = edges.query().circular().on_plane_of(top).radius_near(4.0).nearest(
 print(rim.geometry.length_mm)
 ```
 
-`on_plane_of(top)` asserts plane coincidence only, not adjacency. After any
-geometry-changing edit, take a new snapshot before selecting again.
+`on_plane_of(top)` asserts plane coincidence only. For the rim of a hole in the
+top face itself, use `.adjacent_to(top)`, which also never keeps sketch profile
+edges. After any geometry-changing edit, take a new snapshot before selecting
+again.
 
 ## Advanced Level 2 workflows
 
@@ -268,9 +356,9 @@ pattern = part.part_design.create_circular_pattern(
     "BOLT_CIRCLE", seed, 6, 60.0, axis="Z"
 )
 part.update()
-pattern.instances = 8
+pattern.set_full_circle(8)   # count and spacing together; instances alone keeps 60
 part.update()
-print(pattern.instances, pattern.spacing_deg)
+print(pattern.instances, pattern.spacing_deg, pattern.full_circle)
 
 fillet = part.part_design.get_edge_fillet("EDGE_ROUND")
 fillet.deactivate()

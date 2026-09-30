@@ -23,7 +23,8 @@ geometry change, re-read from a fresh wrapper):
 |---|---|---|
 | `ConstRadEdgeFillet` | `radius` | `radius = value`; `set_radius(value, unit="mm")` for explicit units |
 | `Chamfer` | `length1`, `angle` | `set_length1(...)`, `set_angle(..., unit="deg")` |
-| `Hole` | `diameter`, `depth` | `set_diameter(...)`, `set_depth(...)` |
+| `Hole` | `diameter`, `depth`, `limit`, `bottom`, `hole_type`, `head`, `origin` | `set_diameter(...)`, `set_depth(...)`, `set_limit(...)`, `set_head(...)`; no origin setter |
+| `CircularPattern` | `instances`, `spacing_deg`, `full_circle` | `instances = n`, `spacing_deg = a`, `set_full_circle(n)` |
 | `Shell` | `internal_thickness`, `external_thickness` | `set_internal_thickness(...)`, `set_external_thickness(...)` |
 | `Thickness` | `offset` | `set_offset(...)` |
 | `Pad` / `Pocket` | `depth` (`Pad.height`) | `set_depth(...)` / `set_height(...)` |
@@ -64,12 +65,37 @@ A rediscovered `SketchElement` carries `name`, `kind` and its owning sketch, so
 it goes straight back into the constraint methods — which still require an open
 `with sketch.edit()` block. Reading does not.
 
+- `part.inspect.sketch(name)` reads a sketch from any body without knowing
+  which body holds it; `part.inspect.feature(name)` does the same for one
+  feature's kind, state and verified dimensions.
 - `radius` is exposed for circles because it reads live.
 - `line.geometry()` reads start/end points and length after the sketch edition
   closes. `sketch.geometry()` also returns a value-only sketch summary. Reading
   while that sketch's edition is open is refused before COM.
 - Live-verified rediscovered kinds include `Line2D`, `Circle2D` and the sketch
   axis.
+
+## Driving a rectangle's size
+
+A rectangle drawn with `constraints="fully"` keeps its width and height
+constraints on the returned profile, so the size can be driven later:
+
+```python
+from auto_3dx import Catia
+
+part = Catia.attach().part_named("MY_PART")
+sketch = part.sketches.create("PLATE_PROFILE", support="XY")
+profile = sketch.rectangle(width=60.0, height=40.0, constraints="fully")
+part.bodies.main.features.pad("PLATE", profile=sketch, length=20.0)
+part.update()
+profile.width_constraint.set_value(70.0)    # no rebuild yet
+part.update()                               # the whole rectangle grows to 70
+```
+
+The lower-left corner is anchored to the sketch axes, so the rectangle grows
+right and up. The other levels draw four independent lines: changing one
+side's length there moves only that side. In a new process, find the
+constraint again through `sketch.constraints` by name.
 
 ## Choosing the history position: `work_at`
 
@@ -109,6 +135,11 @@ part.update()                    # the sketch on it and its features regenerate
 - Setters do not rebuild. If the rebuild fails, restore the previous value and
   update again before touching any downstream geometry.
 - Reacquire topology after a plane edit: everything built on the plane moved.
+- A plane can also be offset from a planar face of the solid:
+  `part.geometry.offset_plane(name, face=face, distance=d, side=...)`. Choose
+  the side by material, not by the face's measured normal. After
+  `part.update()`, read `plane.origin` to confirm where it went; before the
+  rebuild it raises `AutomationError`.
 
 ### Deleting a plane safely
 

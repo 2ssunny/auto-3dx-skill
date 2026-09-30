@@ -4,7 +4,7 @@ Two checks run:
 
 1. Document contract (standard library only): frontmatter, short entrypoint,
    links, compatibility metadata, core rules, paths, and retired-location checks.
-2. API check (needs `auto_3dx` importable): Phase 5 public symbols and every
+2. API check (needs `auto_3dx` importable): Phase 5 and SDK v1 public symbols and every
    ```python block in the code-bearing references. It checks syntax, inferred
    members, call signatures, package-root exports, retired names, and raw COM
    or private SDK names. Without `auto_3dx`, the API check is SKIPPED, not a pass.
@@ -78,6 +78,45 @@ PHASE5_PUBLIC_SYMBOLS = (
     "auto_3dx.geometry.part_design.CircularPattern.spacing_deg",
     "auto_3dx.geometry.planes.OffsetPlane.offset",
     "auto_3dx.geometry.part_design.PartDesign.create_circular_pattern",
+)
+SDK_V1_PUBLIC_SYMBOLS = (
+    "auto_3dx.core.part.Part.selection",
+    "auto_3dx.geometry.selection.PartSelection.items",
+    "auto_3dx.geometry.selection.PartSelection.one",
+    "auto_3dx.geometry.selection.PartSelection.one_edge",
+    "auto_3dx.geometry.selection.PartSelection.one_face",
+    "auto_3dx.geometry.selection.PartSelection.one_feature",
+    "auto_3dx.geometry.selection.PartSelection.one_sketch",
+    "auto_3dx.geometry.selection.PartSelection.edges",
+    "auto_3dx.geometry.selection.PartSelection.faces",
+    "auto_3dx.geometry.selection.PartSelection.set",
+    "auto_3dx.geometry.selection.PartSelection.add",
+    "auto_3dx.geometry.selection.PartSelection.clear",
+    "auto_3dx.inspect.summary.Inspector.feature",
+    "auto_3dx.inspect.summary.Inspector.sketch",
+    "auto_3dx.geometry.faces.Face.describe",
+    "auto_3dx.geometry.faces.Face.distance_to",
+    "auto_3dx.geometry.edges.Edge.describe",
+    "auto_3dx.geometry.edges.Edge.from_sketch",
+    "auto_3dx.geometry.query.EdgeQuery.adjacent_to",
+    "auto_3dx.geometry.query.EdgeQuery.solid",
+    "auto_3dx.geometry.query.FaceQuery.adjacent_to",
+    "auto_3dx.geometry.topology.Topology.edges_of",
+    "auto_3dx.geometry.topology.Topology.faces_of",
+    "auto_3dx.highlevel.finders.PartGeometry.edges_of",
+    "auto_3dx.highlevel.finders.PartGeometry.faces_of",
+    "auto_3dx.highlevel.finders.PartGeometry.offset_plane",
+    "auto_3dx.geometry.planes.Plane.origin",
+    "auto_3dx.geometry.planes.Plane.normal",
+    "auto_3dx.geometry.part_design.Hole.hole_type",
+    "auto_3dx.geometry.part_design.Hole.head",
+    "auto_3dx.geometry.part_design.Hole.set_head",
+    "auto_3dx.geometry.part_design.CircularPattern.full_circle",
+    "auto_3dx.geometry.part_design.CircularPattern.set_full_circle",
+    "auto_3dx.geometry.sketch.SketchEditor.polygon",
+    "auto_3dx.geometry.sketch.SketchEditor.distance_to_axis",
+    "auto_3dx.highlevel.profiles.RectangleProfile.width_constraint",
+    "auto_3dx.highlevel.profiles.RectangleProfile.height_constraint",
 )
 SETTABLE_SYMBOLS = {
     "Pad.length", "Pocket.depth", "ConstRadEdgeFillet.radius", "Hole.diameter",
@@ -232,18 +271,43 @@ def resolve_hint(hint: Any) -> Inferred:
     return None
 
 
+def _auto_3dx_classes() -> "dict[str, type]":
+    """Every public class defined in a loaded auto_3dx module, by name.
+
+    A name defined by two modules is left out rather than guessed.
+    """
+    found: dict[str, type] = {}
+    clashes: set[str] = set()
+    for module_name, module in list(sys.modules.items()):
+        if module is None or not module_name.startswith("auto_3dx"):
+            continue
+        for name, value in vars(module).items():
+            if name.startswith("_") or not inspect.isclass(value):
+                continue
+            if value.__module__ != module_name:
+                continue
+            if name in found and found[name] is not value:
+                clashes.add(name)
+            found[name] = value
+    for name in clashes:
+        del found[name]
+    return found
+
+
 def return_type(function: Any, owner: type | None = None) -> Inferred:
     """Reads a function's return annotation as an inferred type."""
+    function = inspect.unwrap(function)
     try:
-        hints = typing.get_type_hints(inspect.unwrap(function))
+        hints = typing.get_type_hints(function)
     except NameError:
-        # Snapshot.query() imports its public query class inside the method, so the
-        # forward annotation is not in the module globals for get_type_hints().
-        annotation = getattr(function, "__annotations__", {}).get("return")
-        if annotation in {"EdgeQuery", "FaceQuery"}:
-            query_module = importlib.import_module("auto_3dx.geometry.query")
-            return ("inst", getattr(query_module, annotation))
-        return None
+        # The SDK imports some return types only under TYPE_CHECKING or inside the
+        # method (Snapshot.query(), Inspector.feature(), Sketch.rectangle()), so the
+        # forward annotation is not in the module globals. Resolve it against the
+        # classes the loaded auto_3dx modules define.
+        try:
+            hints = typing.get_type_hints(function, localns=_auto_3dx_classes())
+        except Exception:  # noqa: BLE001 -- unresolvable annotations are not errors
+            return None
     except Exception:  # noqa: BLE001 -- unresolvable annotations are not errors
         return None
     hint = hints.get("return")
@@ -559,22 +623,22 @@ def check_code(source: str, label: str, root_exports: set[str]) -> tuple[list[st
     return checker.errors, checker.checked
 
 
-def check_phase5_symbols() -> tuple[list[str], int]:
-    """Checks the documented Phase 5 public entry points exist in this SDK."""
+def check_public_symbols() -> tuple[list[str], int]:
+    """Checks the documented Phase 5 and SDK v1 public entry points exist in this SDK."""
     failures: list[str] = []
     checked = 0
-    for symbol in PHASE5_PUBLIC_SYMBOLS:
+    for symbol in PHASE5_PUBLIC_SYMBOLS + SDK_V1_PUBLIC_SYMBOLS:
         module_name, class_name, member_name = symbol.rsplit(".", 2)
         try:
             module = importlib.import_module(module_name)
             cls = getattr(module, class_name)
             member = inspect.getattr_static(cls, member_name)
         except (ImportError, AttributeError) as error:
-            failures.append(f"Phase 5 public symbol {symbol} is unavailable: {error}")
+            failures.append(f"Public symbol {symbol} is unavailable: {error}")
             continue
         if f"{class_name}.{member_name}" in SETTABLE_SYMBOLS:
             if not isinstance(member, property) or member.fset is None:
-                failures.append(f"Phase 5 public symbol {symbol} is not writable.")
+                failures.append(f"Public symbol {symbol} is not writable.")
         checked += 1
     return failures, checked
 
@@ -587,7 +651,7 @@ def check_api() -> tuple[str, list[str], int, int]:
         return "SKIPPED", ["auto_3dx is not importable in this environment."], 0, 0
     failures: list[str] = []
     checked = 0
-    symbol_failures, symbol_count = check_phase5_symbols()
+    symbol_failures, symbol_count = check_public_symbols()
     failures.extend(symbol_failures)
     checked += symbol_count
     for relative in CODE_FILES:

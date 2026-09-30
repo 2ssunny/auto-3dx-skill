@@ -1,6 +1,6 @@
 ---
 name: auto-3dx
-description: Use the public auto-3dx Python SDK to inspect or edit an open 3DEXPERIENCE CATIA Part. Applies to live CAD modeling, sketches, Part Design features, semantic topology selection, measurements, and safe recovery; the SDK is authoritative for signatures and mechanics.
+description: Use the public auto-3dx Python SDK to inspect or edit an open 3DEXPERIENCE CATIA Part. Applies to live CAD modeling, sketches, Part Design features, semantic topology selection, elements the user selected in CATIA, measurements, and safe recovery; the SDK is authoritative for signatures and mechanics.
 ---
 
 # auto-3dx — agent operating contract
@@ -19,15 +19,17 @@ ordinary CAD work. The installed SDK wins if this skill differs from it; report 
   several editors exist. `catia.active_window_title` can help confirm the UI document;
   `active_part()` is suitable only when the target is unambiguous.
 - **Level 3, preferred:** `body.features.pad/pocket/hole/fillet/chamfer/circular_pattern`,
-  `sketch.rectangle/centered_rectangle/circle`, `part.geometry.*`, `part.inspect.facts(...)`,
+  `sketch.rectangle/centered_rectangle/circle`, `part.geometry.*` (finders, `edges_of`,
+  `faces_of`, `offset_plane`), `part.inspect.facts/feature/sketch(...)`, `part.selection`,
   and verified writable feature properties.
 - **Level 2, supported fallback:** `part.sketches.create`, `sketch.edit()` and editor methods,
   `part.part_design.create_*`, `part.topology.*`, `snapshot.query()`, explicit setters/getters,
   and `part.measurement.measure()`. Use it for uncommon intent, composition beyond a helper,
   debugging, or a missing Level 3 abstraction. It is not deprecated.
 - **Level 1 is off limits for ordinary modeling:** `win32com`, `com3dx`, `com_object`
-  mutation, `ShapeFactory`, `Selection`, raw Automation, and private SDK implementation.
-  An unsupported public operation is a finding to report, not permission to bypass the SDK.
+  mutation, `ShapeFactory`, raw CATIA `Selection`, raw Automation, and private SDK
+  implementation. `part.selection` is the public route to the user's selection. An
+  unsupported public operation is a finding to report, not permission to bypass the SDK.
 
 ## Preferred workflow
 
@@ -59,13 +61,18 @@ full topology or geometry validation when the task needs it
 - For a query beyond a finder, use one body-scoped snapshot and compose `snapshot.query()`;
   require `.one()` for a single entity. Reuse a valid snapshot and its measured facts within
   one generation. After a geometry-changing edit, reselect from a fresh snapshot.
-- `on_plane_of(face)` means an edge lies on that face's plane. It does **not** prove the edge
-  bounds the face; true face-edge adjacency is unsupported.
-- A sketch can use an origin/user plane or a planar `Face`. On a face, use `sketch.frame()`
-  to convert between global and sketch-local coordinates; the frame origin need not be the
-  face centre. `sketch.rectangle(..., constraints="none"|"orientation"|"dimensioned")`
-  and `centered_rectangle` are not fully constrained: even `dimensioned` does not create
-  corner coincidence constraints. Complete the logical sketch, close the edition, then use
+- For "the edges of this face" use measured adjacency: `part.geometry.edges_of(face)`,
+  `faces_of(edge)`, or `find_edge(adjacent_to=face, ...)`. `on_plane_of(face)` is only
+  coplanarity; it also matches neighbouring coplanar faces' edges and sketch profile edges.
+- "The edge/face I selected" means `part.selection.one_edge()` / `one_face()`: an ordinary,
+  generation-stamped handle. Zero, several, or wrong-kind selections raise typed errors;
+  never guess. `part.selection.set(element)` highlights for the user and changes only the UI.
+- A sketch can use an origin/user plane, a built reference plane, or a planar `Face`. On a
+  face, use `sketch.frame()` to convert between global and sketch-local coordinates; the
+  frame origin need not be the face centre. Only `rectangle(..., constraints="fully")`
+  (shared corners, eight constraints) is fully constrained and can be driven later through
+  `profile.width_constraint` / `height_constraint`; `none`, `orientation` and `dimensioned`
+  are four independent lines. Complete the logical sketch, close the edition, then use
   `sketch.geometry()` or `element.geometry()` for read-back. Do not read geometry in an
   active edit session.
 
@@ -73,9 +80,12 @@ full topology or geometry validation when the task needs it
 
 - Call `part.update()` at a logical boundary, before a dependent topology selection, and
   before update-sensitive verification. Do not update after each sketch line.
-- Prefer `part.inspect.facts(...)` for routine checks; it avoids a topology search. Full
-  `summary()` and snapshots cost more and should answer a concrete question. Do not treat
-  measured Phase 5 timings as universal guarantees.
+- Prefer `part.inspect.facts(...)` for routine checks and `part.inspect.feature(name)` /
+  `sketch(name)` to read one object; none does a topology search. Full `summary()` and
+  snapshots cost more and should answer a concrete question. Do not treat measured timings
+  as universal guarantees.
+- A positioned Hole is read back before it returns. `HolePlacementMismatchError` means the
+  hole exists under its name in the wrong place: remove it before anything else.
 - Distinguish validation, not found, ambiguity, unsupported capability, stale snapshot,
   update failure, dependency in use, and Automation errors. Fix the cause or refine intent;
   never route around a typed refusal with raw COM. On `PartUpdateError`, inspect
@@ -97,7 +107,7 @@ or another typed refusal, and repeated source exploration after the API contract
 - [High-level API and inspection](references/high-level-api.md): intent calls, properties,
   targeted facts, and Level 2 mappings.
 - [Examples](references/examples.md): block, face sketch and Pocket, Hole, edge feature,
-  revision, targeted inspection, and low-level fallback.
+  adjacency, user selection, reference plane, revision, targeted inspection, and fallback.
 - [Geometry queries](references/geometry-query.md) and [topology](references/topology.md):
   semantic selection, ownership, staleness, and strict cardinality.
 - [Part Design](references/part-design.md), [editing](references/editing.md), and

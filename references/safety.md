@@ -16,11 +16,13 @@ through them. Topology snapshots are stamped with it and refused once it moves.
 | Writing a value: parameter `set`, any feature `set_*` dimension, constraint `set_value` | yes |
 | Activating or deactivating a feature | yes |
 | Hiding or showing a body | yes |
+| Hole `set_head` / `set_limit`, pattern `set_full_circle` | yes |
 | Closing a `sketch.edit()` block (once per block) | yes |
 | `part.update()` / `body.update()`, success **or** failure | yes |
 | A call that raised after reaching CATIA | yes — it advances on attempt |
 | A `ValidationError` raised before any COM call | no |
 | Reads: `list`, `get`, `names`, measurement, inspection, taking a snapshot | no |
+| `part.selection` reads, and `set`/`add`/`clear` highlighting (UI selection only) | no |
 
 Consequences:
 
@@ -41,10 +43,11 @@ Catch a category when the reaction is the same; catch a concrete class from
 | `SessionError` (`Com3dxNotFoundError`, `CatiaConnectionError`, `NoActiveEditorError`, `NoActivePartError`, `InactivePartError`) | Could not reach or use a session, or the Part is not the active one | Report it; ask the user to start 3DEXPERIENCE, open or activate the Part, or leave the Assembly context |
 | `ValidationError` (`StaleSnapshotError`, `CrossBodyReferenceError`, `SupportNotUpdatedError`, `UnsupportedSupportError`, `ParameterTypeError`, ...) | Refused before any COM call; the model is untouched | Fix the arguments or context, per the table below |
 | `NotFoundError` (`ParameterNotFoundError`, `SketchNotFoundError`, `SketchElementNotFoundError`, `TopologyQueryNoMatchError`, `FeatureNotFoundError`, `BodyNotFoundError`, `PlaneNotFoundError`, `ConstraintNotFoundError`, ...) | No object with that name, decided by enumeration | Re-list the current names and ask when unsure |
-| `ConflictError` (`*AlreadyExistsError`, `FeatureConflictError`, `AmbiguousNameError`, `BodyRemovalError`, `TargetNotUpToDateError`, `ParameterInUseError`, `BooleanOperationError`, `TopologyQueryAmbiguousError`, `ReferenceInUseError`) | The model's names or state block the request; nothing was created or changed | Resolve per the table below |
+| `ConflictError` (`*AlreadyExistsError`, `FeatureConflictError`, `AmbiguousNameError`, `BodyRemovalError`, `TargetNotUpToDateError`, `ParameterInUseError`, `BooleanOperationError`, `TopologyQueryAmbiguousError`, `ReferenceInUseError`, `SelectionCountError`, `SelectionTypeError`, `SelectionOutsidePartError`) | The model's names, state or the user's selection block the request; nothing was created or changed | Resolve per the table below |
 | `AutomationError` | CATIA was called; the model may have changed. Carries `hresult` | Inspect before any further mutation |
 | `PartUpdateError` | A rebuild failed and the model is invalid | Run the recovery procedure in §3 |
-| `PartialCreationError` | Created, but the follow-up rename failed; a default-named object is left behind | Find it through `inspect.summary()` and remove it before retrying |
+| `PartialCreationError` | Created, but a follow-up rename or configuration failed; an object is left behind | Find it through `inspect.summary()` and remove it before retrying |
+| `HolePlacementMismatchError` (a `PartialCreationError`) | The hole exists under its requested name at `actual`, not `requested`, after one correction | `part.part_design.remove_hole(error.hole_name)`, then rethink the placement |
 
 Specific errors and the correct response:
 
@@ -65,6 +68,9 @@ Specific errors and the correct response:
 | `TopologyQueryNoMatchError` | The query's assumptions are wrong: read the candidate facts in the message and fix the criteria |
 | `TopologyQueryAmbiguousError` | The intent is underspecified: add a criterion. Never fall back to `first()` or an index |
 | `ReferenceInUseError` | A sketch still uses the plane: remove the feature, then the sketch, then the plane |
+| `SelectionCountError` | Nothing or several items are selected (`error.count`): ask the user to select exactly what is meant. Never pick one |
+| `SelectionTypeError` | The selection is another kind (`error.expected`, `error.actual`), or a vertex or unwrapped kind: ask for the right kind |
+| `SelectionOutsidePartError` | The item cannot be proved to belong to this Part: ask the user to select it in this Part, or activate this Part |
 
 Warnings sit outside the hierarchy, so `except Auto3dxError` never catches one.
 `SelectionNotRestoredWarning` (a `UserWarning`) is the only one; see §6.
@@ -165,6 +171,11 @@ feature temporarily out of the way.
     rebuild the selection with raw `Selection` calls or silence the warning.
 - Selection-based operations run only on the active Part (`InactivePartError`);
   `summary.topology` is `None` for a non-active Part.
+- `part.selection` reads the user's selection without changing it.
+  `part.selection.set()`, `add()` and `clear()` replace or extend the user's
+  selection to show them something; tell the user before replacing a selection
+  they may still need, and clear a highlight you no longer need. Highlighting
+  never changes geometry.
 - The In-Work Object is where CATIA puts the next feature. Read it with
   `part.inspect.in_work_object()`, never `part.com_object.InWorkObject`. Creating
   a feature moves it; `work_in(body)` and `work_at(feature)` set it for their
@@ -194,8 +205,8 @@ checks. A normal modeling workflow does not use it.
 - For ordinary work, use the public geometry, sketch read-back, inspection and
   measurement APIs. Do not use `com_object` to fill a perceived capability gap.
 - Not allowed in ordinary work: any raw mutation, raw topology handling, raw save
-  or export, reaching for `ShapeFactory`, `HybridShapeFactory`, `Selection`,
-  `MeasurableService` / `MeasureService`,
+  or export, reaching for `ShapeFactory`, `HybridShapeFactory`, a raw CATIA
+  `Selection` (use `part.selection`), `MeasurableService` / `MeasureService`,
   `win32com`, `com3dx` or private `_…` members, or passing a raw object to get
   around a `ValidationError` such as `CrossBodyReferenceError`. Use
   `catia.active_window_title` rather than reading the window through COM, and
