@@ -4,10 +4,12 @@ The agent skill for [auto-3dx](https://github.com/2ssunny/auto-3dx), the Python
 SDK that drives a running 3DEXPERIENCE CATIA session over Windows COM.
 
 Skill v2 is the operating contract an AI coding agent follows when it uses the
-stabilized Phase 5 SDK: attach to the session, choose the open Part, inspect
-targeted facts, prefer the highest-level public API that expresses the intent,
-group deterministic edits, rebuild explicitly, verify, and recover safely.
-The composable public API remains the fallback for more specific work.
+SDK: attach to the session, choose the open Part, inspect targeted facts, prefer
+the highest-level public API that expresses the intent, group deterministic
+edits, rebuild explicitly, verify, and recover safely. The composable public API
+remains the fallback for more specific work. Skill 2.1 covers the SDK v1
+additions: user selection, measured face-edge adjacency, hole heads and limits,
+a fully constrained rectangle, face offset planes, and targeted inspection.
 
 **This repository is the single source of truth for the `auto-3dx` skill.** Edit
 the skill here and nowhere else. Agents and other repositories expose it by
@@ -96,8 +98,8 @@ It runs two checks and prints which interpreter and which `auto_3dx` it used:
 2. **API check** (needs `auto_3dx` importable): every Python example in
    `SKILL.md` and the code-bearing references is checked against the installed
    package — members exist, arguments bind to real signatures, package-root
-   imports come from `auto_3dx.__all__`, Phase 5 public symbols exist, and no
-   retired or raw-COM name is used in examples.
+   imports come from `auto_3dx.__all__`, Phase 5 and SDK v1 public symbols
+   exist, and no retired or raw-COM name is used in examples.
 
 Without `auto_3dx` the API check reports **SKIPPED**, which is not a pass. The
 validator never searches for another interpreter.
