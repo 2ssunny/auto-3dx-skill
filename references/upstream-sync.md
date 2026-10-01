@@ -11,6 +11,7 @@ is [compatibility.json](../compatibility.json).
 | Skill revision | 2.1.0 (additive: v1 capabilities on the v2 operating contract) |
 | SDK repository | `2ssunny/auto-3dx`, local read-only checkout |
 | SDK branch and exact HEAD | `feat/v1-functional-completeness`, `e39b63d381a5e1d6483f5f48f9f5c9bd3d5c2039` (pushed; verified identical on the remote) |
+| Released as | Merged to `main` (`2ssunny/auto-3dx` PR #5) and tagged `v1.0.0` at `d9d6b30`; `e39b63d` is reachable from both. Between them `src` changes only docstring paths and `pyproject.toml` only packaging metadata, so the reviewed public API is the released one. The development branch was deleted, so `compatibility.json` names `main` |
 | SDK code baseline | `08df6b9`. `38e957f` changes three docstring lines in `bodies.py`; `e39b63d` changes only the `pyproject.toml` version on top of it |
 | SDK package version | `1.0.0` in `pyproject.toml` (not tagged when reviewed) |
 | Previous skill review | `d8bf819` (Skill 2.0.0). Since the PR #4 merge `53625b3` nothing public was removed. Existing calls changed behavior in three ways: `part.geometry.edges()` (and so `find_edge`) drops sketch profile edges; `create_hole` always writes the hole type (simple unless `head=`), because CATIA carries it over; a positioned hole can now raise `HolePlacementMismatchError` instead of silently landing elsewhere |

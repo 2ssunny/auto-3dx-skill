@@ -1,0 +1,111 @@
+# validate-skill: checks the skill's documents and examples against the exact auto-3dx
+# SDK revision compatibility.json declares.
+#
+# compatibility.json is the only place that names the reviewed SDK. This workflow reads
+# sdk_repository, sdk_commit and sdk_package_version from it, installs auto-3dx from that
+# exact Git commit, proves the installed distribution is that commit and that version, and
+# only then runs scripts/validate_skill.py --require-sdk, so an SDK-less run cannot pass.
+# All API checking lives in the validator; nothing here re-implements it.
+#
+# The SDK is imported for introspection only. Nothing calls Catia.attach(); hosted runners
+# have no 3DEXPERIENCE, and no CAD session is needed.
+name: validate-skill
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-skill-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  validate-skill:
+    name: validate-skill
+    runs-on: windows-latest
+    timeout-minutes: 15
+    # Each pwsh step sets $PSNativeCommandUseErrorActionPreference, so a native command
+    # that exits non-zero fails the step at once.
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Check the repository basics
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          if (-not (Test-Path -PathType Leaf SKILL.md)) { throw "SKILL.md is missing." }
+          python -m py_compile scripts/validate_skill.py
+
+      - name: Read the declared SDK from compatibility.json
+        id: sdk
+        shell: python
+        run: |
+          import json
+          import os
+          import re
+
+          with open("compatibility.json", encoding="utf-8") as handle:
+              record = json.load(handle)
+          repository = str(record.get("sdk_repository", ""))
+          commit = str(record.get("sdk_commit", ""))
+          version = str(record.get("sdk_package_version", ""))
+          # Validated before any of them reaches a command line.
+          if not re.fullmatch(r"[A-Za-z0-9-]+/[A-Za-z0-9._-]+", repository):
+              raise SystemExit(f"sdk_repository must be owner/name, not {repository!r}")
+          if not re.fullmatch(r"[0-9a-f]{40}", commit):
+              raise SystemExit(f"sdk_commit must be a full SHA-1, not {commit!r}")
+          if not re.fullmatch(r"[0-9A-Za-z.+!-]+", version):
+              raise SystemExit(f"sdk_package_version is not a version, not {version!r}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"repository={repository}\ncommit={commit}\nversion={version}\n")
+          print(f"declared SDK: {repository}@{commit} (auto-3dx {version})")
+
+      - name: Install auto-3dx from the declared commit
+        env:
+          SDK_REPOSITORY: ${{ steps.sdk.outputs.repository }}
+          SDK_COMMIT: ${{ steps.sdk.outputs.commit }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m pip install --upgrade pip
+          python -m pip install "auto-3dx @ git+https://github.com/$env:SDK_REPOSITORY.git@$env:SDK_COMMIT"
+
+      - name: Prove the installed SDK is the declared commit and version
+        env:
+          SDK_COMMIT: ${{ steps.sdk.outputs.commit }}
+          SDK_VERSION: ${{ steps.sdk.outputs.version }}
+        shell: python
+        run: |
+          import importlib.metadata
+          import json
+          import os
+
+          import auto_3dx
+
+          installed = importlib.metadata.version("auto-3dx")
+          expected = os.environ["SDK_VERSION"]
+          if installed != expected:
+              raise SystemExit(f"auto-3dx {installed} is installed; compatibility.json declares {expected}")
+          # pip records a VCS install's resolved commit in PEP 610 direct_url.json.
+          direct_url = importlib.metadata.distribution("auto-3dx").read_text("direct_url.json")
+          commit = json.loads(direct_url or "{}").get("vcs_info", {}).get("commit_id")
+          if commit != os.environ["SDK_COMMIT"]:
+              raise SystemExit(f"auto-3dx was installed from {commit!r}, not {os.environ['SDK_COMMIT']}")
+          print(f"auto_3dx {installed} at {commit} imported from {auto_3dx.__file__}")
+
+      - name: Validate the skill against the installed SDK
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          python scripts/validate_skill.py --require-sdk

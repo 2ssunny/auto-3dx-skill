@@ -15,11 +15,17 @@ and it prints which interpreter and which `auto_3dx` it used:
 
     python scripts/validate_skill.py
 
+`--require-sdk` makes a SKIPPED API check a failure; CI uses it so a run without the
+SDK can never pass:
+
+    python scripts/validate_skill.py --require-sdk
+
 It finds the skill from its own location (the repository root is the parent of
 `scripts/`), so it runs from any working directory and does not depend on what
 the checkout folder is called.
 """
 
+import argparse
 import ast
 import collections.abc
 import dataclasses
@@ -665,6 +671,14 @@ def check_api() -> tuple[str, list[str], int, int]:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--require-sdk",
+        action="store_true",
+        help="fail instead of skipping the API check when auto_3dx is not importable",
+    )
+    arguments = parser.parse_args()
+
     version = ".".join(str(part) for part in sys.version_info[:3])
     print(f"interpreter: {sys.executable} (Python {version})")
     auto_3dx_spec = importlib.util.find_spec("auto_3dx")
@@ -684,8 +698,11 @@ def main() -> int:
     print(f"api check: {status}{detail}")
     for message in api_messages:
         print(f"  - {message}")
+    skipped_but_required = status == "SKIPPED" and arguments.require_sdk
+    if skipped_but_required:
+        print("  - --require-sdk: a skipped API check is a failure.")
 
-    return 1 if document_failures or status == "FAIL" else 0
+    return 1 if document_failures or status == "FAIL" or skipped_but_required else 0
 
 
 if __name__ == "__main__":

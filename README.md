@@ -39,6 +39,8 @@ references/           detail loaded on demand (capabilities, safety, geometry qu
 compatibility.json    Skill v2 / exact reviewed SDK commit and compatibility expectation
 scripts/validate_skill.py
                       document contract + syntax and API checks against the installed SDK
+.github/workflows/validate-skill.yml
+                      CI: the validator against the SDK commit compatibility.json declares
 ```
 
 ## Supported agents
@@ -101,8 +103,20 @@ It runs two checks and prints which interpreter and which `auto_3dx` it used:
    imports come from `auto_3dx.__all__`, Phase 5 and SDK v1 public symbols
    exist, and no retired or raw-COM name is used in examples.
 
-Without `auto_3dx` the API check reports **SKIPPED**, which is not a pass. The
-validator never searches for another interpreter.
+Without `auto_3dx` the API check reports **SKIPPED**, which is not a pass, but it
+still lets you check the documents locally. `--require-sdk` turns a skip into a
+failure. The validator never searches for another interpreter.
+
+### Continuous integration
+
+The `validate-skill` workflow runs on every pull request and every push to
+`main`. It installs auto-3dx from the exact `sdk_repository` and `sdk_commit`
+declared in [`compatibility.json`](compatibility.json), checks that the
+installed version matches `sdk_package_version` and that the import works, then
+runs `python scripts/validate_skill.py --require-sdk`. CI therefore requires the
+full API check; a document-only run cannot pass there. It needs no CATIA
+session. To validate against a new SDK revision, update `compatibility.json`
+after reviewing it, and CI follows.
 
 ## SDK compatibility
 
